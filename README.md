@@ -15,6 +15,11 @@ mac-headroom clean             # dry run: what would be deleted and how big it i
 mac-headroom clean --yes       # actually delete
 mac-headroom clean --only chrome-cache --only spotify-cache --yes
 mac-headroom --json <any>      # machine-readable output
+
+mac-headroom schedule install --weekday mon --hour 10 --only chrome-cache --only homebrew
+mac-headroom schedule status   # installed? loaded? when? last run?
+mac-headroom schedule run      # do the weekly routine now
+mac-headroom schedule uninstall
 ```
 
 ## Principles
@@ -37,6 +42,18 @@ This exact failure mode hid 14GB for months before this tool existed.
 `growth` walks a root once, records the size of every path to a given depth,
 and diffs against the previous scan. New and deleted paths are included.
 
+## Weekly job
+
+`schedule install` writes a launchd LaunchAgent that runs `mac-headroom schedule run`
+at the given time each week (or on next wake if the Mac was asleep). Each run does
+`diagnose`, a home `growth` scan, and `clean --yes` for the cleaners you named at
+install time, and appends everything to `~/Library/Logs/mac-headroom.log`. Because
+`diagnose` and `growth` record history on every run, the weekly job is what makes
+"what changed since last week" answerable.
+
+Install the binary somewhere stable first (`cargo install --path .`); the plist
+points at the binary's absolute path.
+
 ## With an AI agent
 
 mac-headroom is designed to be run by a coding agent and interpreted by it. The
@@ -52,5 +69,5 @@ cargo install --path .
 
 ## Status
 
-Working proof of concept. Not yet: user-defined cleaners via config, a
-launchd scheduler, or Homebrew packaging.
+Working proof of concept. Not yet: user-defined cleaners via config, or
+Homebrew packaging.

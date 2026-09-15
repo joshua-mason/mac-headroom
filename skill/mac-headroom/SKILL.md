@@ -32,5 +32,10 @@ mac-headroom measures. You interpret. Run it with `--json` and reason over the o
   "reclaimed" number.
 - Every real deletion is appended to `~/.local/state/mac-headroom/audit.log`. Check it
   before assuming mac-headroom removed something.
+- `mac-headroom --json schedule status` shows whether the weekly job is installed and
+  when it last ran. `~/Library/Logs/mac-headroom.log` has each weekly run's diagnose,
+  growth and clean output, which is the best history of what changed on this machine.
+- `schedule install` and `schedule run` both delete (the cleaners named with `--only`).
+  Treat them like `--yes`: only on explicit instruction.
 - Setting `HEADROOM_NO_DELETE=1` makes `--yes` refuse. Suggest it for agent sessions
   where the user wants reports only.

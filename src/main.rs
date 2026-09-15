@@ -1,6 +1,7 @@
 mod cleaners;
 mod diag;
 mod growth;
+mod schedule;
 mod util;
 
 use clap::{Parser, Subcommand};
@@ -52,6 +53,44 @@ enum Cmd {
         #[arg(long, default_value_t = 25)]
         top: usize,
     },
+    /// Manage the weekly launchd job
+    Schedule {
+        #[command(subcommand)]
+        action: ScheduleCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Install (or replace) the weekly job
+    Install {
+        /// Day of the week: mon, tue, ... sun
+        #[arg(long, default_value = "mon")]
+        weekday: String,
+        /// Hour, 0-23
+        #[arg(long, default_value_t = 10)]
+        hour: u8,
+        /// Minute, 0-59
+        #[arg(long, default_value_t = 0)]
+        minute: u8,
+        /// Run only the named cleaner(s). Repeatable. Default: all.
+        #[arg(long, value_name = "NAME")]
+        only: Vec<String>,
+        /// Skip the weekly home growth scan (about a minute)
+        #[arg(long)]
+        no_growth: bool,
+    },
+    /// Remove the weekly job
+    Uninstall,
+    /// Show whether the job is installed, its schedule, and the last run
+    Status,
+    /// Do the weekly routine now: diagnose, growth scan, clean. This is what launchd calls.
+    Run {
+        #[arg(long, value_name = "NAME")]
+        only: Vec<String>,
+        #[arg(long)]
+        no_growth: bool,
+    },
 }
 
 fn emit<T: Serialize>(value: &T) {
@@ -89,7 +128,12 @@ fn main() {
                 }
             }
         }
-        Cmd::Clean { yes, only } => clean(cli.json, yes, &only),
+        Cmd::Clean { yes, only } => {
+            let report = run_clean(cli.json, yes, &only);
+            if cli.json {
+                emit(&report);
+            }
+        }
         Cmd::Growth {
             root,
             depth,
@@ -106,21 +150,52 @@ fn main() {
                 growth::print_text(&r)
             }
         }
+        Cmd::Schedule { action } => match action {
+            ScheduleCmd::Install {
+                weekday,
+                hour,
+                minute,
+                only,
+                no_growth,
+            } => {
+                if let Err(e) = schedule::install(&weekday, hour, minute, &only, !no_growth) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            ScheduleCmd::Uninstall => {
+                if let Err(e) = schedule::uninstall() {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            ScheduleCmd::Status => {
+                let s = schedule::status();
+                if cli.json {
+                    emit(&s)
+                } else {
+                    schedule::print_status(&s)
+                }
+            }
+            ScheduleCmd::Run { only, no_growth } => schedule::run(&only, !no_growth),
+        },
     }
 }
 
 #[derive(Serialize)]
-struct CleanReport {
+pub struct CleanReport {
     dry_run: bool,
     free_before: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     free_after: Option<u64>,
     /// Sum over path cleaners only. Command cleaners are not sized.
-    bytes: u64,
+    pub bytes: u64,
     cleaners: Vec<cleaners::Outcome>,
 }
 
-fn clean(json: bool, apply: bool, only: &[String]) {
+/// Run the selected cleaners. Prints text output unless `json` is set;
+/// the caller emits the JSON in that case.
+pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
     if apply && std::env::var_os("HEADROOM_NO_DELETE").is_some() {
         eprintln!("refusing: HEADROOM_NO_DELETE is set, so --yes is disabled in this environment");
         std::process::exit(3);
@@ -163,19 +238,18 @@ fn clean(json: bool, apply: bool, only: &[String]) {
         audit(&report);
     }
 
-    if json {
-        emit(&report);
-        return;
+    if !json {
+        println!();
+        match (report.free_before, report.free_after) {
+            (Some(b), Some(a)) => println!("Done. Free space {} -> {}", human(b), human(a)),
+            _ if !apply => println!(
+                "Would reclaim at least {} from path cleaners. Command cleaners are not sized in a dry run.",
+                human(report.bytes)
+            ),
+            _ => println!("Done."),
+        }
     }
-    println!();
-    match (report.free_before, report.free_after) {
-        (Some(b), Some(a)) => println!("Done. Free space {} -> {}", human(b), human(a)),
-        _ if !apply => println!(
-            "Would reclaim at least {} from path cleaners. Command cleaners are not sized in a dry run.",
-            human(report.bytes)
-        ),
-        _ => println!("Done."),
-    }
+    report
 }
 
 /// Every real deletion is logged, so a missing file can be traced back or ruled out.
@@ -201,13 +275,12 @@ fn audit(r: &CleanReport) {
             );
         }
         if let Some(cmd) = &o.command {
+            let status = serde_json::to_string(&o.status).unwrap_or_default();
             let _ = writeln!(
                 f,
                 "{ts}\t{}\t{}\t0\t{cmd}",
                 o.name,
-                serde_json::to_string(&o.status)
-                    .unwrap_or_default()
-                    .trim_matches('"')
+                status.trim_matches('"')
             );
         }
     }
