@@ -277,7 +277,9 @@ $('sub').textContent = `${D.host} · generated ${when(D.generated_at)} · mac-he
 /* ---- History line chart ---- */
 (() => {
   const el = $('history'), H = D.history;
-  if (H.length < 2) { el.innerHTML = `<h2>Used and free over time</h2><p class="empty">${H.length ? 'One reading so far.' : 'No readings yet.'} Each <code>diagnose</code> or weekly run adds one. When free falls faster than used grows, the gap is snapshot-pinned space, not files.</p>`; return; }
+  const HINT = '<p class="ink2">Early days: check back in a week or two. Each <code>diagnose</code> and every weekly run adds a reading, and the story is in how used and free move against each other over time.</p>';
+  if (H.length < 2) { el.innerHTML = `<h2>Used and free over time</h2><p class="empty">${H.length ? 'One reading so far.' : 'No readings yet.'} When free falls faster than used grows, the gap is snapshot-pinned space, not files.</p>${HINT}`; return; }
+  const young = H[H.length - 1].at - H[0].at < 7 * 86400;
   const W = 860, HT = 260, L = 64, R = 70, T = 16, B = 34;
   const xs = H.map(r => r.at), x0 = Math.min(...xs), x1 = Math.max(...xs);
   const ymax = Math.max(...H.map(r => Math.max(r.used, r.free))) * 1.05;
@@ -303,6 +305,7 @@ $('sub').textContent = `${D.host} · generated ${when(D.generated_at)} · mac-he
       <text class="endlabel" x="${X(last.at) + 8}" y="${Y(last.used) + 4}">${h(last.used)}</text>
       <text class="endlabel" x="${X(last.at) + 8}" y="${Y(last.free) + 4}">${h(last.free)}</text>
     </svg>
+    ${young ? HINT : ''}
     <details><summary>Table of readings</summary><div class="overflow"><table><tr><th>When</th><th>Used</th><th>Free</th></tr>${H.map(r => `<tr><td>${when(r.at)}</td><td class="num">${h(r.used)}</td><td class="num">${h(r.free)}</td></tr>`).join('')}</table></div></details>`;
   const svg = $('hsvg'), cross = $('cross');
   svg.addEventListener('mousemove', e => {
@@ -322,7 +325,7 @@ $('sub').textContent = `${D.host} · generated ${when(D.generated_at)} · mac-he
   const diff = g.previous_at != null;
   const head = diff
     ? `Compared with the scan from ${ago(g.previous_at)}: <b>${sg(g.total - g.previous_total)}</b> overall (${h(g.previous_total)} → ${h(g.total)}). Changes of ${h(g.min_bytes)} or more, largest first.`
-    : `Baseline scan from ${ago(g.scanned_at)}: ${h(g.total)} under ~ (depth ${g.depth}). Largest entries. Run <code>mac-headroom growth</code> again later to see what changed.`;
+    : `Baseline scan from ${ago(g.scanned_at)}: ${h(g.total)} under ~ (depth ${g.depth}). Largest entries. Run <code>mac-headroom growth</code> again later to see what changed. The weekly job does this for you; check back in a week.`;
   if (!g.entries.length) { el.innerHTML = `<h2>What grew</h2><p class="ink2">${head}</p><p class="empty">Nothing changed by that much.</p>`; return; }
   const max = Math.max(...g.entries.map(e => Math.abs(diff ? e.delta : e.bytes)));
   const rows = g.entries.map(e => {
