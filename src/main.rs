@@ -1,4 +1,5 @@
 mod cleaners;
+mod config;
 mod diag;
 mod growth;
 mod schedule;
@@ -58,6 +59,23 @@ enum Cmd {
         #[command(subcommand)]
         action: ScheduleCmd,
     },
+    /// Manage the config file (user-defined cleaners, disabled built-ins)
+    Config {
+        #[command(subcommand)]
+        action: ConfigCmd,
+    },
+    /// One-screen overview: disk, config, weekly job, recorded history
+    Status,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Write a commented example config (refuses to overwrite)
+    Init,
+    /// Print the config file path
+    Path,
+    /// Validate the config and list what it defines
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -115,15 +133,27 @@ fn main() {
             }
         }
         Cmd::List => {
+            let all = load_cleaners();
             if cli.json {
-                emit(&cleaners::CLEANERS);
+                emit(&all);
             } else {
-                for c in cleaners::CLEANERS {
-                    let skip = c
-                        .skip_if_running
-                        .map(|p| format!("  [skipped while {p} is running]"))
-                        .unwrap_or_default();
-                    println!("{:<20} {}{skip}", c.name, c.summary);
+                for c in &all {
+                    let mut tags = Vec::new();
+                    if let Some(p) = &c.skip_if_running {
+                        tags.push(format!("skipped while {p} is running"));
+                    }
+                    if c.source == cleaners::Source::Config {
+                        tags.push("from config".into());
+                    }
+                    if c.disabled {
+                        tags.push("disabled in config".into());
+                    }
+                    let tags = if tags.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  [{}]", tags.join("; "))
+                    };
+                    println!("{:<20} {}{tags}", c.name, c.summary);
                     println!("{:<20} {}", "", c.why_safe);
                 }
             }
@@ -179,7 +209,143 @@ fn main() {
             }
             ScheduleCmd::Run { only, no_growth } => schedule::run(&only, !no_growth),
         },
+        Cmd::Config { action } => match action {
+            ConfigCmd::Init => match config::init() {
+                Ok(p) => println!(
+                    "Wrote {}. Edit it, then run: mac-headroom config check",
+                    p.display()
+                ),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            },
+            ConfigCmd::Path => println!("{}", config::path().display()),
+            ConfigCmd::Check => {
+                let c = config::check();
+                if cli.json {
+                    emit(&c)
+                } else {
+                    config::print_check(&c)
+                }
+                if !c.problems.is_empty() {
+                    std::process::exit(1);
+                }
+            }
+        },
+        Cmd::Status => {
+            let s = overview();
+            if cli.json {
+                emit(&s)
+            } else {
+                print_overview(&s)
+            }
+        }
     }
+}
+
+/// Load built-in plus configured cleaners, or exit: a broken config must not
+/// silently fall back to "just the built-ins".
+fn load_cleaners() -> Vec<cleaners::Cleaner> {
+    config::all_cleaners().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(4);
+    })
+}
+
+#[derive(Serialize)]
+struct StateSummary {
+    dir: PathBuf,
+    diagnose_readings: usize,
+    growth_scans: usize,
+    audit_entries: usize,
+}
+
+#[derive(Serialize)]
+struct Overview {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disk: Option<DiskNow>,
+    config: config::Check,
+    cleaners_enabled: Vec<String>,
+    schedule: schedule::Status,
+    state: StateSummary,
+}
+
+#[derive(Serialize)]
+struct DiskNow {
+    used: u64,
+    free: u64,
+    total: u64,
+}
+
+fn count_lines(p: &std::path::Path) -> usize {
+    std::fs::read_to_string(p)
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0)
+}
+
+/// Read-only. Unlike `diagnose`, it does not record a history entry.
+fn overview() -> Overview {
+    let cfg = config::check();
+    let cleaners_enabled = if cfg.problems.is_empty() {
+        config::all_cleaners()
+            .map(|all| {
+                all.into_iter()
+                    .filter(|c| !c.disabled)
+                    .map(|c| c.name)
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    let dir = state_dir();
+    let growth_scans = std::fs::read_dir(dir.join("growth"))
+        .map(|rd| rd.flatten().count())
+        .unwrap_or(0);
+    Overview {
+        disk: diag::disk().map(|d| DiskNow {
+            used: d.used,
+            free: d.free,
+            total: d.total,
+        }),
+        config: cfg,
+        cleaners_enabled,
+        schedule: schedule::status(),
+        state: StateSummary {
+            diagnose_readings: count_lines(&dir.join("history.tsv")),
+            growth_scans,
+            audit_entries: count_lines(&dir.join("audit.log")),
+            dir,
+        },
+    }
+}
+
+fn print_overview(o: &Overview) {
+    match &o.disk {
+        Some(d) => println!(
+            "Disk    {} free of {} ({} used)",
+            human(d.free),
+            human(d.total),
+            human(d.used)
+        ),
+        None => println!("Disk    unavailable (diskutil failed)"),
+    }
+    println!();
+    config::print_check(&o.config);
+    println!();
+    println!(
+        "Cleaners enabled for `clean`: {}",
+        o.cleaners_enabled.join(", ")
+    );
+    println!();
+    print!("Weekly job  ");
+    schedule::print_status(&o.schedule);
+    println!();
+    println!("State   {}", o.state.dir.display());
+    println!("  diagnose readings  {}", o.state.diagnose_readings);
+    println!("  growth scans       {}", o.state.growth_scans);
+    println!("  audit entries      {}", o.state.audit_entries);
 }
 
 #[derive(Serialize)]
@@ -200,12 +366,13 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
         eprintln!("refusing: HEADROOM_NO_DELETE is set, so --yes is disabled in this environment");
         std::process::exit(3);
     }
+    let all = load_cleaners();
     let selected: Vec<&cleaners::Cleaner> = if only.is_empty() {
-        cleaners::CLEANERS.iter().collect()
+        all.iter().filter(|c| !c.disabled).collect()
     } else {
         only.iter()
             .map(|n| {
-                cleaners::find(n).unwrap_or_else(|| {
+                cleaners::find(&all, n).unwrap_or_else(|| {
                     eprintln!("unknown cleaner: {n}  (see `mac-headroom list`)");
                     std::process::exit(2);
                 })

@@ -7,6 +7,13 @@ description: Diagnose macOS disk pressure with the mac-headroom CLI. Use when th
 
 mac-headroom measures. You interpret. Run it with `--json` and reason over the output.
 
+## First, the lay of the land
+
+`mac-headroom --json status` is read-only and shows the disk, the config file and
+its problems, which cleaners are enabled, whether the weekly job is installed and
+when it last ran, and how much history exists. Start here when the user asks "what
+is set up?" or "what does this do on my machine?".
+
 ## Order of operations
 
 1. `mac-headroom --json diagnose` first, always. If `assessment` is `space_pinned`, stop
@@ -20,6 +27,16 @@ mac-headroom measures. You interpret. Run it with `--json` and reason over the o
 3. Only then consider `mac-headroom --json clean` (a dry run). Caches recover a few GB
    at most. Present what it found and the `why_safe` text from `mac-headroom --json list`
    so the user can decide.
+
+## Adding a cleaner for the user
+
+When a growth report or a manual hunt finds a recurring leak, the durable fix is a
+cleaner in `~/.config/mac-headroom/config.toml` (see `mac-headroom config init` for
+the format). Write the `why_safe` line to be honest about what is lost. Use
+`keep_newest` for build caches that leak one copy per build, and `older_than_days`
+for scratch that is safe once a job has finished. Then run `mac-headroom config check`
+and a dry run of `clean --only <name>`, and show the user what would be deleted and
+what was kept before suggesting `--yes`.
 
 ## Rules
 

@@ -16,6 +16,10 @@ mac-headroom clean --yes       # actually delete
 mac-headroom clean --only chrome-cache --only spotify-cache --yes
 mac-headroom --json <any>      # machine-readable output
 
+mac-headroom status            # one screen: disk, config, weekly job, recorded history
+mac-headroom config init       # write a commented example config
+mac-headroom config check      # validate it and list what it defines
+
 mac-headroom schedule install --weekday mon --hour 10 --only chrome-cache --only homebrew
 mac-headroom schedule status   # installed? loaded? when? last run?
 mac-headroom schedule run      # do the weekly routine now
@@ -41,6 +45,36 @@ This exact failure mode hid 14GB for months before this tool existed.
 
 `growth` walks a root once, records the size of every path to a given depth,
 and diffs against the previous scan. New and deleted paths are included.
+
+## Your own cleaners
+
+`~/.config/mac-headroom/config.toml` adds cleaners with the same fields the
+built-ins have, plus two filters for the leaks that need judgement:
+
+```toml
+[[cleaner]]
+name = "myapp-model-cache"
+summary = "Stale compiled model bundles from MyApp dev builds"
+why_safe = "Only the newest bundle per arch is used. Older siblings are leftovers."
+paths = ["~/Library/Caches/com.example.myapp/models/*/*"]
+keep_newest = 1              # per directory, keep the N most recently modified matches
+skip_if_running = "MyApp"
+
+[[cleaner]]
+name = "agent-job-scratch"
+summary = "Scratch dirs left by finished background jobs"
+why_safe = "Untouched for a week means the job is long done."
+paths = ["~/.claude/jobs/*/tmp"]
+older_than_days = 7          # only when nothing inside was modified for N days
+
+disable = ["spotify-cache"]  # built-ins to leave out of a plain `clean`
+```
+
+Paths must start with `~/` and name a directory under home plus something
+inside it, so `~/Library` or `~/*` are refused. `why_safe` is mandatory. A
+config with any problem stops every command rather than falling back to the
+built-ins, because a half-understood config is how the wrong thing gets deleted.
+Kept matches are shown in the output with the reason they were kept.
 
 ## Weekly job
 
@@ -69,5 +103,5 @@ cargo install --path .
 
 ## Status
 
-Working proof of concept. Not yet: user-defined cleaners via config, or
-Homebrew packaging.
+Working proof of concept. Not yet: Homebrew packaging. Maybe: a read-only
+HTML report of the same information `status` and `growth` give.

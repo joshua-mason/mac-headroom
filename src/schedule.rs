@@ -124,8 +124,9 @@ pub fn install(
     if hour > 23 || minute > 59 {
         return Err("hour must be 0-23 and minute 0-59".into());
     }
+    let all = crate::config::all_cleaners()?;
     for name in only {
-        if crate::cleaners::find(name).is_none() {
+        if crate::cleaners::find(&all, name).is_none() {
             return Err(format!(
                 "unknown cleaner: {name}  (see `mac-headroom list`)"
             ));
