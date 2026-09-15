@@ -57,7 +57,10 @@ fn save(root: &Path, depth: usize, sizes: &Sizes, at: u64) -> std::io::Result<()
         .iter()
         .map(|(p, b)| format!("{b}\t{}\n", p.display()))
         .collect();
-    fs::write(scans_dir().join(format!("{}{at}.tsv", scan_prefix(root, depth))), body)
+    fs::write(
+        scans_dir().join(format!("{}{at}.tsv", scan_prefix(root, depth))),
+        body,
+    )
 }
 
 /// Most recent previous scan for this root and depth: (timestamp, sizes).
@@ -66,8 +69,15 @@ fn load_previous(root: &Path, depth: usize) -> Option<(u64, Sizes)> {
     let mut latest: Option<(u64, PathBuf)> = None;
     for e in fs::read_dir(scans_dir()).ok()?.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(rest) = name.strip_prefix(&prefix) else { continue };
-        let Some(ts) = rest.strip_suffix(".tsv").and_then(|s| s.parse::<u64>().ok()) else { continue };
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(ts) = rest
+            .strip_suffix(".tsv")
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
         if latest.as_ref().is_none_or(|(t, _)| ts > *t) {
             latest = Some((ts, e.path()));
         }
@@ -123,7 +133,12 @@ pub fn report(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Report {
         None => sizes
             .iter()
             .filter(|(p, _)| p.as_path() != root)
-            .map(|(p, &b)| Entry { path: p.clone(), bytes: b, previous: None, delta: None })
+            .map(|(p, &b)| Entry {
+                path: p.clone(),
+                bytes: b,
+                previous: None,
+                delta: None,
+            })
             .collect(),
         Some((_, prev)) => {
             let mut all: Vec<Entry> = sizes
@@ -132,14 +147,24 @@ pub fn report(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Report {
                 .map(|(p, &b)| {
                     let previous = prev.get(p).copied();
                     let delta = b as i64 - previous.unwrap_or(0) as i64;
-                    Entry { path: p.clone(), bytes: b, previous, delta: Some(delta) }
+                    Entry {
+                        path: p.clone(),
+                        bytes: b,
+                        previous,
+                        delta: Some(delta),
+                    }
                 })
                 .collect();
             // Paths that existed last time and are gone now.
             all.extend(
                 prev.iter()
                     .filter(|(p, _)| p.as_path() != root && !sizes.contains_key(*p))
-                    .map(|(p, &b)| Entry { path: p.clone(), bytes: 0, previous: Some(b), delta: Some(-(b as i64)) }),
+                    .map(|(p, &b)| Entry {
+                        path: p.clone(),
+                        bytes: 0,
+                        previous: Some(b),
+                        delta: Some(-(b as i64)),
+                    }),
             );
             all.retain(|e| e.delta.unwrap_or(0).unsigned_abs() >= min_bytes);
             all
@@ -147,7 +172,7 @@ pub fn report(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Report {
     };
 
     match previous {
-        None => entries.sort_by(|a, b| b.bytes.cmp(&a.bytes)),
+        None => entries.sort_by_key(|e| std::cmp::Reverse(e.bytes)),
         Some(_) => entries.sort_by_key(|e| std::cmp::Reverse(e.delta.unwrap_or(0).unsigned_abs())),
     }
     entries.truncate(top);

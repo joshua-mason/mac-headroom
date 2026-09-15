@@ -73,7 +73,11 @@ fn record(d: &Disk) -> Option<(u64, u64, u64)> {
     let previous = fs::read_to_string(&path).ok().and_then(|s| {
         let last = s.lines().rev().find(|l| !l.trim().is_empty())?;
         let mut f = last.split('\t');
-        Some((f.next()?.parse().ok()?, f.next()?.parse().ok()?, f.next()?.parse().ok()?))
+        Some((
+            f.next()?.parse().ok()?,
+            f.next()?.parse().ok()?,
+            f.next()?.parse().ok()?,
+        ))
     });
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{}\t{}\t{}", now(), d.used, d.free);
@@ -94,7 +98,12 @@ pub fn report() -> Option<Report> {
     let since_last = record(&d).map(|(previous_at, pu, pf)| {
         let used = d.used as i64 - pu as i64;
         let free = d.free as i64 - pf as i64;
-        Delta { previous_at, used, free, unaccounted: -free - used }
+        Delta {
+            previous_at,
+            used,
+            free,
+            unaccounted: -free - used,
+        }
     });
 
     let (assessment, advice) = match &since_last {
@@ -137,7 +146,10 @@ pub fn print_text(r: &Report) {
     println!("Data volume");
     println!("  used   {:>9}", human(r.used));
     println!("  free   {:>9}", human(r.free));
-    println!("  other  {:>9}   (system volume, VM, preboot, purgeable)", human(r.other));
+    println!(
+        "  other  {:>9}   (system volume, VM, preboot, purgeable)",
+        human(r.other)
+    );
     println!("  total  {:>9}", human(r.total));
     println!();
     if r.snapshots.is_empty() {
@@ -168,7 +180,10 @@ mod tests {
     fn parses_diskutil_bytes() {
         let out = "   Volume Used Space:         174.8 GB (174847209472 Bytes) (exactly 341498456 512-Byte-Units)\n   Container Free Space:      36.3 GB (36304953344 Bytes) (exactly 70908112 512-Byte-Units)\n";
         assert_eq!(bytes_field(out, "Volume Used Space"), Some(174_847_209_472));
-        assert_eq!(bytes_field(out, "Container Free Space"), Some(36_304_953_344));
+        assert_eq!(
+            bytes_field(out, "Container Free Space"),
+            Some(36_304_953_344)
+        );
         assert_eq!(bytes_field(out, "Nope"), None);
     }
 }

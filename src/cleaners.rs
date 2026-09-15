@@ -199,7 +199,11 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
                 }
                 out.targets.push(Target { path, bytes, error });
             }
-            out.status = if apply { Status::Cleared } else { Status::WouldClear };
+            out.status = if apply {
+                Status::Cleared
+            } else {
+                Status::WouldClear
+            };
         }
         Action::Cmd(argv) => {
             out.command = Some(argv.join(" "));
@@ -241,7 +245,11 @@ pub fn print_text(c: &Cleaner, o: &Outcome) {
                     println!("             failed: {e}");
                 }
             }
-            let verb = if o.status == Status::Cleared { "reclaimed" } else { "would reclaim" };
+            let verb = if o.status == Status::Cleared {
+                "reclaimed"
+            } else {
+                "would reclaim"
+            };
             println!("  {verb} {}", human(o.bytes));
         }
     }

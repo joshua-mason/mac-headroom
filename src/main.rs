@@ -10,7 +10,11 @@ use std::path::PathBuf;
 use util::{expand, home, human, now, state_dir};
 
 #[derive(Parser)]
-#[command(name = "mac-headroom", version, about = "Disk pressure diagnostician and cache cleaner for macOS")]
+#[command(
+    name = "mac-headroom",
+    version,
+    about = "Disk pressure diagnostician and cache cleaner for macOS"
+)]
 struct Cli {
     /// Emit JSON instead of text. Works with every subcommand.
     #[arg(long, global = true)]
@@ -51,7 +55,10 @@ enum Cmd {
 }
 
 fn emit<T: Serialize>(value: &T) {
-    println!("{}", serde_json::to_string_pretty(value).expect("serialize"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("serialize")
+    );
 }
 
 fn main() {
@@ -62,7 +69,11 @@ fn main() {
                 eprintln!("could not read diskutil info for /System/Volumes/Data");
                 std::process::exit(1);
             };
-            if cli.json { emit(&r) } else { diag::print_text(&r) }
+            if cli.json {
+                emit(&r)
+            } else {
+                diag::print_text(&r)
+            }
         }
         Cmd::List => {
             if cli.json {
@@ -79,12 +90,21 @@ fn main() {
             }
         }
         Cmd::Clean { yes, only } => clean(cli.json, yes, &only),
-        Cmd::Growth { root, depth, min_mb, top } => {
+        Cmd::Growth {
+            root,
+            depth,
+            min_mb,
+            top,
+        } => {
             let root = root
                 .map(|p| PathBuf::from(expand(&p.to_string_lossy())))
                 .unwrap_or_else(home);
             let r = growth::report(&root, depth, min_mb << 20, top);
-            if cli.json { emit(&r) } else { growth::print_text(&r) }
+            if cli.json {
+                emit(&r)
+            } else {
+                growth::print_text(&r)
+            }
         }
     }
 }
@@ -123,7 +143,13 @@ fn clean(json: bool, apply: bool, only: &[String]) {
     }
     let free_before = diag::disk().map(|d| d.free);
 
-    let mut report = CleanReport { dry_run: !apply, free_before, free_after: None, bytes: 0, cleaners: Vec::new() };
+    let mut report = CleanReport {
+        dry_run: !apply,
+        free_before,
+        free_after: None,
+        bytes: 0,
+        cleaners: Vec::new(),
+    };
     for c in selected {
         let o = cleaners::run(c, apply);
         if !json {
@@ -155,15 +181,34 @@ fn clean(json: bool, apply: bool, only: &[String]) {
 /// Every real deletion is logged, so a missing file can be traced back or ruled out.
 fn audit(r: &CleanReport) {
     let path = state_dir().join("audit.log");
-    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
     let ts = now();
     for o in &r.cleaners {
         for t in &o.targets {
             let result = t.error.as_deref().unwrap_or("deleted");
-            let _ = writeln!(f, "{ts}\t{}\t{result}\t{}\t{}", o.name, t.bytes, t.path.display());
+            let _ = writeln!(
+                f,
+                "{ts}\t{}\t{result}\t{}\t{}",
+                o.name,
+                t.bytes,
+                t.path.display()
+            );
         }
         if let Some(cmd) = &o.command {
-            let _ = writeln!(f, "{ts}\t{}\t{}\t0\t{cmd}", o.name, serde_json::to_string(&o.status).unwrap_or_default().trim_matches('"'));
+            let _ = writeln!(
+                f,
+                "{ts}\t{}\t{}\t0\t{cmd}",
+                o.name,
+                serde_json::to_string(&o.status)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+            );
         }
     }
 }
