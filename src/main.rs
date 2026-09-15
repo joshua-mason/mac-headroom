@@ -2,6 +2,7 @@ mod cleaners;
 mod config;
 mod diag;
 mod growth;
+mod report;
 mod schedule;
 mod util;
 
@@ -66,6 +67,15 @@ enum Cmd {
     },
     /// One-screen overview: disk, config, weekly job, recorded history
     Status,
+    /// Write a self-contained HTML report of the same information and open it
+    Report {
+        /// Where to write it (default: the state directory)
+        #[arg(long, value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Write the file without opening a browser
+        #[arg(long)]
+        no_open: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -239,6 +249,22 @@ fn main() {
                 emit(&s)
             } else {
                 print_overview(&s)
+            }
+        }
+        Cmd::Report { out, no_open } => {
+            let data = report::gather();
+            let out = out.unwrap_or_else(report::default_path);
+            if let Err(e) = report::write(&data, &out) {
+                eprintln!("could not write {}: {e}", out.display());
+                std::process::exit(1);
+            }
+            if cli.json {
+                emit(&serde_json::json!({ "path": out, "opened": !no_open }));
+            } else {
+                println!("Wrote {}", out.display());
+            }
+            if !no_open && !report::open(&out) {
+                eprintln!("could not open a browser; open the file by hand");
             }
         }
     }

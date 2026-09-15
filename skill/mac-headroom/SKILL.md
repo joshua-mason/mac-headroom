@@ -14,6 +14,9 @@ its problems, which cleaners are enabled, whether the weekly job is installed an
 when it last ran, and how much history exists. Start here when the user asks "what
 is set up?" or "what does this do on my machine?".
 
+When the user wants to *see* the picture rather than read it, `mac-headroom report`
+writes a self-contained HTML page and opens it in their browser. It is read-only.
+
 ## Order of operations
 
 1. `mac-headroom --json diagnose` first, always. If `assessment` is `space_pinned`, stop

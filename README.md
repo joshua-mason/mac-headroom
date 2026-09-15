@@ -17,6 +17,7 @@ mac-headroom clean --only chrome-cache --only spotify-cache --yes
 mac-headroom --json <any>      # machine-readable output
 
 mac-headroom status            # one screen: disk, config, weekly job, recorded history
+mac-headroom report            # the same as a self-contained HTML page, opened in your browser
 mac-headroom config init       # write a commented example config
 mac-headroom config check      # validate it and list what it defines
 
@@ -88,6 +89,15 @@ install time, and appends everything to `~/Library/Logs/mac-headroom.log`. Becau
 Install the binary somewhere stable first (`cargo install --path .`); the plist
 points at the binary's absolute path.
 
+## Report
+
+`report` writes one self-contained HTML file (no server, no network, no
+external assets) and opens it: disk composition, used and free over time,
+the last growth diff as bars, the weekly job, every cleaner with its reason,
+and the deletion audit. It is read-only and built from saved state, so it
+never scans or deletes. Use `--no-open` to just write the file, `--out` to
+choose where.
+
 ## With an AI agent
 
 mac-headroom is designed to be run by a coding agent and interpreted by it. The
@@ -103,5 +113,4 @@ cargo install --path .
 
 ## Status
 
-Working proof of concept. Not yet: Homebrew packaging. Maybe: a read-only
-HTML report of the same information `status` and `growth` give.
+Working proof of concept. Not yet: Homebrew packaging.

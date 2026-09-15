@@ -63,35 +63,45 @@ fn save(root: &Path, depth: usize, sizes: &Sizes, at: u64) -> std::io::Result<()
     )
 }
 
+/// Saved scans for this root and depth, newest first: (timestamp, file).
+fn saved_scans(root: &Path, depth: usize) -> Vec<(u64, PathBuf)> {
+    let prefix = scan_prefix(root, depth);
+    let mut found: Vec<(u64, PathBuf)> = fs::read_dir(scans_dir())
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let ts = name
+                        .strip_prefix(&prefix)?
+                        .strip_suffix(".tsv")?
+                        .parse()
+                        .ok()?;
+                    Some((ts, e.path()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    found.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    found
+}
+
+fn read_scan(path: &Path) -> Option<Sizes> {
+    Some(
+        fs::read_to_string(path)
+            .ok()?
+            .lines()
+            .filter_map(|l| {
+                let (b, p) = l.split_once('\t')?;
+                Some((PathBuf::from(p), b.parse().ok()?))
+            })
+            .collect(),
+    )
+}
+
 /// Most recent previous scan for this root and depth: (timestamp, sizes).
 fn load_previous(root: &Path, depth: usize) -> Option<(u64, Sizes)> {
-    let prefix = scan_prefix(root, depth);
-    let mut latest: Option<(u64, PathBuf)> = None;
-    for e in fs::read_dir(scans_dir()).ok()?.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let Some(rest) = name.strip_prefix(&prefix) else {
-            continue;
-        };
-        let Some(ts) = rest
-            .strip_suffix(".tsv")
-            .and_then(|s| s.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        if latest.as_ref().is_none_or(|(t, _)| ts > *t) {
-            latest = Some((ts, e.path()));
-        }
-    }
-    let (ts, path) = latest?;
-    let sizes = fs::read_to_string(path)
-        .ok()?
-        .lines()
-        .filter_map(|l| {
-            let (b, p) = l.split_once('\t')?;
-            Some((PathBuf::from(p), b.parse().ok()?))
-        })
-        .collect();
-    Some((ts, sizes))
+    let (ts, path) = saved_scans(root, depth).into_iter().next()?;
+    Some((ts, read_scan(&path)?))
 }
 
 #[derive(Serialize)]
@@ -123,11 +133,35 @@ pub struct Report {
 pub fn report(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Report {
     let scanned_at = now();
     let sizes = scan(root, depth);
-    let total = sizes.get(root).copied().unwrap_or(0);
     let previous = load_previous(root, depth);
     if let Err(e) = save(root, depth, &sizes, scanned_at) {
         eprintln!("warning: could not save scan: {e}");
     }
+    build(root, depth, scanned_at, sizes, previous, min_bytes, top)
+}
+
+/// The same report, from the two most recent saved scans, without rescanning.
+/// None if nothing has been scanned yet.
+pub fn from_saved(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Option<Report> {
+    let mut scans = saved_scans(root, depth).into_iter();
+    let (latest_at, latest_path) = scans.next()?;
+    let latest = read_scan(&latest_path)?;
+    let previous = scans.next().and_then(|(ts, p)| Some((ts, read_scan(&p)?)));
+    Some(build(
+        root, depth, latest_at, latest, previous, min_bytes, top,
+    ))
+}
+
+fn build(
+    root: &Path,
+    depth: usize,
+    scanned_at: u64,
+    sizes: Sizes,
+    previous: Option<(u64, Sizes)>,
+    min_bytes: u64,
+    top: usize,
+) -> Report {
+    let total = sizes.get(root).copied().unwrap_or(0);
 
     let mut entries: Vec<Entry> = match &previous {
         None => sizes
