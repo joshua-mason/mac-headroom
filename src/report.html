@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mac-headroom report</title>
+<style>
+:root{color-scheme:light;
+  --page:#f9f9f7;--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;
+  --grid:#e1e0d9;--axis:#c3c2b7;--rule:#ddddd4;
+  --used:#2a78d6;--free:#eb6834;--other:#cde2fb;
+  --grow:#e34948;--shrink:#2a78d6;
+  --ok:#006300;--warn:#d03b3b;--note:#52514e}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;
+  --page:#0d0d0d;--surface:#1a1a19;--ink:#fff;--ink2:#c3c2b7;--muted:#898781;
+  --grid:#2c2c2a;--axis:#383835;--rule:#2c2c2a;
+  --used:#3987e5;--free:#d95926;--other:#104281;
+  --grow:#e66767;--shrink:#3987e5;
+  --ok:#0ca30c;--warn:#e66767;--note:#c3c2b7}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:40px 20px 64px;
+  -webkit-font-smoothing:antialiased}
+main{max-width:880px;margin:0 auto}
+h1{font-size:15px;font-weight:600;margin:0;letter-spacing:.01em}
+h2{font-size:12px;font-weight:600;margin:0 0 18px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+.meta{color:var(--muted);font-size:13px;margin:2px 0 0}
+header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;
+  padding-bottom:14px;border-bottom:1px solid var(--ink)}
+section{padding:32px 0;border-bottom:1px solid var(--rule)}
+section:last-child{border-bottom:0}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.ink2{color:var(--ink2)}.muted{color:var(--muted)}
+/* verdict */
+.verdict{padding:26px 0 4px}
+.verdict .head{font-size:26px;font-weight:600;line-height:1.25;letter-spacing:-.01em;margin:0 0 8px;
+  max-width:36ch;border-left:3px solid var(--note);padding-left:16px}
+.verdict.ok .head{border-color:var(--ok)}
+.verdict.warn .head{border-color:var(--warn)}
+.verdict .body{color:var(--ink2);margin:0 0 0 19px;max-width:62ch}
+/* figures */
+.figs{display:flex;gap:40px;flex-wrap:wrap;margin-bottom:22px}
+.fig .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.fig .v{font-size:22px;font-weight:600;line-height:1.3}
+.fig.lead .v{font-size:40px;letter-spacing:-.02em}
+/* composition */
+.comp{display:flex;height:10px;border-radius:2px;overflow:hidden;background:var(--other);margin-bottom:10px}
+.comp>div{height:100%;border-right:2px solid var(--page)}
+.keys{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--ink2)}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:7px;vertical-align:0}
+.ln{display:inline-block;width:14px;height:2px;margin-right:7px;vertical-align:4px}
+svg{display:block;width:100%;height:auto}
+.gl{stroke:var(--grid);stroke-width:1}
+.ax{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.cap{color:var(--ink2);margin:12px 0 0;max-width:68ch}
+.hint{color:var(--ink2);background:linear-gradient(90deg,var(--surface),transparent);
+  border-left:2px solid var(--axis);padding:10px 14px;margin:16px 0 0;max-width:68ch}
+/* tree */
+.tree{margin-top:4px}
+.node{display:grid;grid-template-columns:1fr 92px;gap:14px;align-items:center;padding:3px 0;position:relative}
+.node:hover{background:var(--surface)}
+.nm{display:flex;align-items:center;gap:9px;min-width:0}
+.nm .bar{height:13px;border-radius:0 2px 2px 0;background:var(--used);flex:none;min-width:2px}
+.nm .bar.pos{background:var(--grow)}.nm .bar.neg{background:var(--shrink)}
+.nm .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nm .lbl .dim{color:var(--muted)}
+.node .amt{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink2)}
+.node.rest .lbl,.node.rest .amt{color:var(--muted);font-style:italic}
+.node.rest .bar{opacity:.35}
+.tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:3px;border:1px solid var(--axis);
+  color:var(--muted);margin-left:6px;font-style:normal}
+/* tables */
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;
+  letter-spacing:.07em;padding:0 10px 7px 0;border-bottom:1px solid var(--axis);white-space:nowrap}
+td{padding:7px 10px 7px 0;border-bottom:1px solid var(--grid);vertical-align:top}
+td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.off td{color:var(--muted)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.dot.on{background:var(--ok)}.dot.no{background:var(--axis)}
+details{margin-top:14px}
+summary{cursor:pointer;color:var(--ink2);font-size:13px}
+summary:hover{color:var(--ink)}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:12px;
+  overflow-x:auto;margin:10px 0 0;font-size:12px;white-space:pre-wrap;line-height:1.45}
+.scroll{overflow-x:auto}
+.empty{color:var(--muted);max-width:68ch}
+#tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--page);border-radius:4px;
+  padding:7px 10px;font-size:12px;display:none;max-width:420px;word-break:break-all;z-index:9;line-height:1.5}
+#tip b{font-weight:600}
+@media (max-width:560px){
+  .figs{gap:22px}.fig.lead .v{font-size:32px}.verdict .head{font-size:21px}
+  .node{grid-template-columns:1fr 78px;gap:10px}
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>mac-headroom</h1>
+  <p class="meta" id="meta"></p>
+</header>
+<div id="tip"></div>
+<div class="verdict" id="verdict"></div>
+<section id="disk"></section>
+<section id="history"></section>
+<section id="space"></section>
+<section id="job"></section>
+<section id="cleaners"></section>
+<section id="audit"></section>
+</main>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const GB = 1024 ** 3, U = ['B','KB','MB','GB','TB'];
+const h = b => { let v = Math.abs(b), i = 0; while (v >= 1024 && i < 4) { v /= 1024; i++; } return (i ? v.toFixed(v < 10 ? 1 : 0) : v) + ' ' + U[i]; };
+const sg = d => (d < 0 ? '−' : '+') + h(d);
+const when = t => new Date(t * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const day = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const ago = t => { const s = Math.max(0, D.generated_at - t), d = s / 86400 | 0, hh = s % 86400 / 3600 | 0, m = s % 3600 / 60 | 0;
+  return d ? `${d}d ${hh}h ago` : hh ? `${hh}h ${m}m ago` : `${m}m ago`; };
+const tilde = p => p.startsWith(D.home) ? '~' + p.slice(D.home.length) : p;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+const $ = id => document.getElementById(id);
+const tip = $('tip');
+const showTip = (html, x, y) => { tip.innerHTML = html; tip.style.display = 'block';
+  tip.style.left = Math.max(8, Math.min(x + 14, innerWidth - tip.offsetWidth - 8)) + 'px';
+  tip.style.top = (y + 16 + tip.offsetHeight > innerHeight ? y - tip.offsetHeight - 10 : y + 16) + 'px'; };
+const hideTip = () => { tip.style.display = 'none'; };
+
+$('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
+
+/* ---------- Verdict: the same call the CLI makes, stated first ---------- */
+(() => {
+  const H = D.history, n = H.length;
+  let tone = 'note', head = '', body = '';
+  if (D.update_snapshot_pinned) {
+    tone = 'warn';
+    head = 'A staged macOS update is holding on to disk space';
+    body = 'Those snapshots do not show up in a directory scan and do not count as used space either. Installing the pending update and rebooting is the only thing that releases them. Look for files only after that.';
+  } else if (n < 2) {
+    head = n ? 'One reading so far' : 'No readings yet';
+    body = 'Each diagnose and each weekly run records used and free space. Two readings are enough to tell whether space is going to files or somewhere a scan cannot see.';
+  } else {
+    const a = H[n - 2], b = H[n - 1];
+    const du = b.used - a.used, df = b.free - a.free, gap = -df - du;
+    const span = ago(a.at);
+    if (gap > 2 * GB) {
+      tone = 'warn';
+      head = `${h(gap)} of free space is unaccounted for`;
+      body = `Since ${span}, free space fell by ${h(-df)} but the data volume only grew by ${h(du)}. The difference is not in any file. It is almost always an APFS snapshot from a staged macOS update, or purgeable space yet to be released.`;
+    } else if (du > 5 * GB) {
+      head = `Real files added ${h(du)}`;
+      body = `Since ${span}, used and free moved together, so nothing is hidden. The space went into files. The space section below shows which directory took it.`;
+    } else {
+      tone = 'ok';
+      head = 'Nothing is hiding';
+      body = `Since ${span}, used and free moved together: ${sg(du)} used against ${sg(df)} free. Space is accounted for by files you can see.`;
+    }
+  }
+  $('verdict').className = 'verdict ' + tone;
+  $('verdict').innerHTML = `<p class="head">${esc(head)}</p><p class="body">${esc(body)}</p>`;
+})();
+
+/* ---------- Disk now ---------- */
+(() => {
+  const d = D.disk, el = $('disk');
+  if (!d) { el.innerHTML = '<h2>Disk</h2><p class="empty">diskutil was unavailable.</p>'; return; }
+  const pc = x => (100 * x / d.total).toFixed(0) + '%';
+  el.innerHTML = `<h2>Disk</h2>
+    <div class="figs">
+      <div class="fig lead"><div class="k">Free</div><div class="v num">${h(d.free)}</div></div>
+      <div class="fig"><div class="k">Your data</div><div class="v num">${h(d.used)}</div></div>
+      <div class="fig"><div class="k">System and purgeable</div><div class="v num">${h(d.other)}</div></div>
+      <div class="fig"><div class="k">Capacity</div><div class="v num">${h(d.total)}</div></div>
+    </div>
+    <div class="comp">
+      <div style="width:${100 * d.used / d.total}%;background:var(--used)" data-tip="<b>Your data</b><br>${h(d.used)} · ${pc(d.used)}"></div>
+      <div style="width:${100 * d.other / d.total}%;background:var(--other)" data-tip="<b>System, VM, purgeable</b><br>${h(d.other)} · ${pc(d.other)}"></div>
+    </div>
+    <div class="keys">
+      <span><i class="sw" style="background:var(--used)"></i>your data ${pc(d.used)}</span>
+      <span><i class="sw" style="background:var(--other)"></i>system and purgeable ${pc(d.other)}</span>
+      <span><i class="sw" style="background:var(--page);box-shadow:inset 0 0 0 1px var(--axis)"></i>free ${pc(d.free)}</span>
+    </div>
+    ${D.snapshots.length ? `<p class="cap">${D.snapshots.length} local snapshot${D.snapshots.length > 1 ? 's' : ''}: <span class="mono">${D.snapshots.map(esc).join('<br>')}</span></p>` : ''}`;
+})();
+
+/* ---------- Space over time: the gap is the point ---------- */
+(() => {
+  const el = $('history'), H = D.history, d = D.disk;
+  const HINT = '<p class="hint">Only today’s readings so far. Check back in a week: every diagnose and every weekly run adds one, and the shape worth watching is whether the coloured band keeps reaching the capacity line.</p>';
+  if (H.length < 2 || !d) {
+    el.innerHTML = `<h2>Space over time</h2><p class="empty">${H.length ? 'One reading so far.' : 'No readings yet.'}</p>${HINT}`;
+    return;
+  }
+  const W = 880, HT = 300, L = 58, R = 16, T = 22, B = 40;
+  const xs = H.map(r => r.at), x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const top = d.total * 1.02;
+  const X = t => L + (x1 === x0 ? (W - L - R) / 2 : (t - x0) / (x1 - x0) * (W - L - R));
+  const Y = v => T + (HT - T - B) * (1 - v / top);
+  const step = top / GB > 400 ? 100 : top / GB > 150 ? 50 : 25;
+  let grid = '', ticks = '';
+  for (let g = 0; g * GB <= top; g += step) {
+    grid += `<line class="gl" x1="${L}" x2="${W - R}" y1="${Y(g * GB)}" y2="${Y(g * GB)}"/>`;
+    ticks += `<text class="ax" x="${L - 8}" y="${Y(g * GB) + 4}" text-anchor="end">${g}</text>`;
+  }
+  const area = (lo, hi) => H.map(r => `${X(r.at).toFixed(1)},${Y(hi(r)).toFixed(1)}`).join(' ')
+    + ' ' + H.slice().reverse().map(r => `${X(r.at).toFixed(1)},${Y(lo(r)).toFixed(1)}`).join(' ');
+  const line = f => H.map((r, i) => (i ? 'L' : 'M') + X(r.at).toFixed(1) + ' ' + Y(f(r)).toFixed(1)).join(' ');
+  const last = H[H.length - 1], gap = d.total - last.used - last.free;
+  const young = last.at - H[0].at < 7 * 86400;
+  el.innerHTML = `<h2>Space over time</h2>
+    <div class="keys" style="margin-bottom:10px">
+      <span><i class="sw" style="background:var(--used)"></i>your data</span>
+      <span><i class="sw" style="background:var(--free)"></i>free</span>
+      <span><i class="ln" style="background:var(--ink2)"></i>capacity</span>
+      <span class="muted">scale in GB · gap below the line is system, VM, purgeable and any snapshots</span>
+    </div>
+    <svg viewBox="0 0 ${W} ${HT}" id="hsvg" role="img" aria-label="Used and free space stacked against capacity">
+      <g>${grid}</g>
+      <polygon points="${area(() => 0, r => r.used)}" fill="var(--used)" opacity=".85"/>
+      <polygon points="${area(r => r.used, r => r.used + r.free)}" fill="var(--free)" opacity=".85"/>
+      <path d="${line(r => r.used + r.free)}" fill="none" stroke="var(--page)" stroke-width="2"/>
+      <line x1="${L}" x2="${W - R}" y1="${Y(d.total)}" y2="${Y(d.total)}" stroke="var(--ink2)" stroke-width="1.5" stroke-dasharray="5 4"/>
+      <text class="ax" x="${W - R}" y="${Y(d.total) - 7}" text-anchor="end">capacity ${h(d.total)}</text>
+      <line class="gl" x1="${L}" x2="${W - R}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--axis)"/>
+      <g>${ticks}</g>
+      <line id="cross" y1="${T}" y2="${Y(0)}" stroke="var(--axis)" stroke-width="1" style="display:none"/>
+      <text class="ax" x="${L}" y="${HT - 12}">${day(H[0].at)}</text>
+      <text class="ax" x="${W - R}" y="${HT - 12}" text-anchor="end">${day(last.at)}</text>
+    </svg>
+    <p class="cap">The two bands are what the disk can account for. The space between them and the capacity line is everything else: the system volume, virtual memory, purgeable files and any snapshots. Right now that gap is <b>${h(gap)}</b>. When it widens while the bands shrink, space is being pinned rather than spent.</p>
+    ${young ? HINT : ''}
+    <details><summary>All ${H.length} readings</summary><div class="scroll"><table>
+      <tr><th>When</th><th class="r">Your data</th><th class="r">Free</th><th class="r">Unaccounted</th></tr>
+      ${H.map(r => `<tr><td>${when(r.at)}</td><td class="r">${h(r.used)}</td><td class="r">${h(r.free)}</td><td class="r">${h(d.total - r.used - r.free)}</td></tr>`).join('')}
+    </table></div></details>`;
+  const svg = $('hsvg'), cross = $('cross');
+  svg.addEventListener('mousemove', e => {
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    let best = H[0], bd = Infinity;
+    for (const r of H) { const dd = Math.abs(X(r.at) - p.x); if (dd < bd) { bd = dd; best = r; } }
+    cross.setAttribute('x1', X(best.at)); cross.setAttribute('x2', X(best.at)); cross.style.display = 'block';
+    showTip(`<b>${when(best.at)}</b><br>your data ${h(best.used)}<br>free ${h(best.free)}<br>unaccounted ${h(d.total - best.used - best.free)}`, e.clientX, e.clientY);
+  });
+  svg.addEventListener('mouseleave', () => { cross.style.display = 'none'; hideTip(); });
+})();
+
+/* ---------- Where the space is: nested, so nothing is counted twice ---------- */
+(() => {
+  const el = $('space'), g = D.growth;
+  if (!g) {
+    el.innerHTML = '<h2>Where the space is</h2><p class="empty">No scan saved yet. Run <span class="mono">mac-headroom growth</span> once for a baseline, then again later for the difference. The weekly job does both for you.</p>';
+    return;
+  }
+  const diff = g.previous_at != null;
+  const val = e => diff ? e.delta : e.bytes;
+  const rootTotal = diff
+    ? Math.max(Math.abs(g.total - g.previous_total), ...g.entries.map(e => Math.abs(val(e))), 1)
+    : g.total;
+
+  /* Nest entries by path so a parent never sits beside its own child. */
+  const byPath = new Map(g.entries.map(e => [e.path, { ...e, kids: [] }]));
+  const roots = [];
+  for (const node of byPath.values()) {
+    let parent = null, best = -1;
+    for (const p of byPath.keys()) {
+      if (p !== node.path && node.path.startsWith(p + '/') && p.length > best) { best = p.length; parent = p; }
+    }
+    (parent ? byPath.get(parent).kids : roots).push(node);
+  }
+  const order = (a, b) => Math.abs(val(b)) - Math.abs(val(a));
+  const rows = [];
+  const walk = (nodes, depth) => {
+    nodes.sort(order);
+    for (const n of nodes) {
+      rows.push({ node: n, depth });
+      if (n.kids.length) {
+        walk(n.kids, depth + 1);
+        const rest = val(n) - n.kids.reduce((s, k) => s + val(k), 0);
+        if (Math.abs(rest) >= g.min_bytes) rows.push({ node: n, depth: depth + 1, rest });
+      }
+    }
+  };
+  walk(roots, 0);
+
+  const head = diff
+    ? `Compared with the scan ${ago(g.previous_at)}, this directory changed by <b>${sg(g.total - g.previous_total)}</b>, from ${h(g.previous_total)} to ${h(g.total)}. Changes of ${h(g.min_bytes)} or more.`
+    : `${h(g.total)} under <span class="mono">${esc(tilde(g.root))}</span>, ${g.depth} levels deep. Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space.`;
+
+  const render = r => {
+    const n = r.node, v = r.rest !== undefined ? r.rest : val(n);
+    const w = Math.max(0.4, 100 * Math.abs(v) / rootTotal);
+    const name = r.rest !== undefined
+      ? 'everything else in ' + (tilde(n.path).split('/').pop() || tilde(n.path))
+      : tilde(n.path).split('/').pop() || tilde(n.path);
+    const cls = diff ? (v >= 0 ? 'pos' : 'neg') : '';
+    const tag = r.rest !== undefined ? ''
+      : diff && n.previous == null ? '<span class="tag">new</span>'
+      : diff && n.bytes === 0 ? '<span class="tag">gone</span>' : '';
+    const tipHtml = r.rest !== undefined
+      ? `<b>${esc(tilde(n.path))}</b><br>not in any row below it: ${h(v)}`
+      : `<b>${esc(tilde(n.path))}</b><br>now ${h(n.bytes)}` + (diff ? `<br>before ${n.previous == null ? 'not present' : h(n.previous)}<br>change ${sg(n.delta)}` : '');
+    return `<div class="node${r.rest !== undefined ? ' rest' : ''}" data-tip="${esc(tipHtml)}">
+      <div class="nm" style="padding-left:${r.depth * 20}px">
+        <span class="bar ${cls}" style="width:${w}%"></span>
+        <span class="lbl">${esc(name)}${tag}</span>
+      </div>
+      <div class="amt">${diff ? sg(v) : h(v)}</div></div>`;
+  };
+
+  el.innerHTML = `<h2>${diff ? 'What changed' : 'Where the space is'}</h2>
+    <p class="cap" style="margin:0 0 18px">${head}</p>
+    ${diff ? '<div class="keys" style="margin-bottom:12px"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>' : ''}
+    <div class="tree">${rows.length ? rows.map(render).join('') : '<p class="empty">Nothing changed by that much.</p>'}</div>`;
+})();
+
+/* ---------- Weekly job ---------- */
+(() => {
+  const s = D.schedule, el = $('job');
+  if (!s.installed) {
+    el.innerHTML = `<h2>Weekly job</h2><p class="empty">Not set up. <span class="mono">mac-headroom schedule install</span> adds a launchd job that runs diagnose, a growth scan and the cleaners you name, once a week. That is also what fills in the history above.</p>`;
+    return;
+  }
+  el.innerHTML = `<h2>Weekly job</h2>
+    <table>
+      <tr><th style="width:130px">Status</th><td><span class="dot ${s.loaded ? 'on' : 'no'}"></span>${s.loaded ? 'registered with launchd' : 'plist present but launchd does not have it'}</td></tr>
+      <tr><th>Runs</th><td>${esc(s.schedule || '?')}, or on next wake</td></tr>
+      <tr><th>Cleans</th><td>${s.cleaners.length ? s.cleaners.map(esc).join(', ') : 'every enabled cleaner'}</td></tr>
+      <tr><th>Binary</th><td class="mono">${esc(s.binary || '?')}${s.binary_exists ? '' : ' — missing, reinstall'}</td></tr>
+      <tr><th>Last run</th><td>${s.last_run ? esc(s.last_run) : 'never'}</td></tr>
+    </table>
+    ${D.last_run_log ? `<details><summary>Output of the last run</summary><pre>${esc(D.last_run_log)}</pre></details>` : ''}`;
+})();
+
+/* ---------- Cleaners ---------- */
+(() => {
+  const el = $('cleaners'), c = D.config, list = D.cleaners;
+  const on = list.filter(k => !k.disabled), off = list.filter(k => k.disabled);
+  const what = k => k.command && k.command.length ? `<span class="mono">${esc(k.command.join(' '))}</span>`
+    : `<span class="mono">${(k.paths || []).map(esc).join('<br>')}</span>`;
+  const rule = k => [
+    k.skip_if_running ? `skipped while ${esc(k.skip_if_running)} is open` : '',
+    k.keep_newest != null ? `keeps the newest ${k.keep_newest} in each directory` : '',
+    k.older_than_days != null ? `only when untouched for ${k.older_than_days} days` : ''
+  ].filter(Boolean).join(' · ');
+  const row = k => `<tr class="${k.disabled ? 'off' : ''}">
+      <td class="mono" style="white-space:nowrap">${esc(k.name)}</td>
+      <td>${esc(k.summary)}<div class="muted" style="margin-top:2px">${esc(k.why_safe)}</div>
+        ${rule(k) ? `<div class="muted" style="margin-top:2px">${rule(k)}</div>` : ''}</td>
+      <td>${what(k)}</td>
+      <td class="r muted">${k.source === 'config' ? 'yours' : 'built in'}</td>
+    </tr>`;
+  const problems = c.problems.length
+    ? `<p class="cap" style="color:var(--warn)">${c.problems.map(esc).join('<br>')}</p>` : '';
+  el.innerHTML = `<h2>Cleaners</h2>
+    <p class="cap" style="margin:0 0 18px">${on.length} enabled${off.length ? `, ${off.length} turned off` : ''}. ${c.exists
+      ? `Yours are defined in <span class="mono">${esc(tilde(c.path))}</span>.`
+      : 'Built-ins only. <span class="mono">mac-headroom config init</span> starts a config file.'} Nothing here runs without <span class="mono">--yes</span>.</p>
+    ${problems}
+    <div class="scroll"><table>
+      <tr><th>Name</th><th>What it clears, and why that is safe</th><th>Where</th><th class="r">Source</th></tr>
+      ${on.map(row).join('')}${off.map(row).join('')}
+    </table></div>`;
+})();
+
+/* ---------- Deletions ---------- */
+(() => {
+  const el = $('audit'), A = D.audit;
+  if (!A.length) {
+    el.innerHTML = '<h2>Deletions</h2><p class="empty">mac-headroom has not deleted anything on this machine. Every real deletion is appended to an audit log, so if a file goes missing you can rule this tool in or out.</p>';
+    return;
+  }
+  const total = A.reduce((s, a) => s + (a.bytes || 0), 0);
+  el.innerHTML = `<h2>Deletions</h2>
+    <p class="cap" style="margin:0 0 18px">Last ${A.length}, ${h(total)} in total. Every deletion is recorded, so a missing file can be traced back or ruled out.</p>
+    <div class="scroll"><table>
+      <tr><th>When</th><th>Cleaner</th><th>Result</th><th class="r">Size</th><th>Path or command</th></tr>
+      ${A.map(a => `<tr><td style="white-space:nowrap">${when(a.at)}</td><td class="mono">${esc(a.cleaner)}</td><td>${esc(a.result)}</td><td class="r">${a.bytes ? h(a.bytes) : ''}</td><td class="mono">${esc(tilde(a.path))}</td></tr>`).join('')}
+    </table></div>`;
+})();
+
+document.addEventListener('mousemove', e => {
+  const t = e.target.closest('[data-tip]');
+  if (t) showTip(t.dataset.tip, e.clientX, e.clientY);
+  else if (!e.target.closest('#hsvg')) hideTip();
+});
+</script>
+</body>
+</html>

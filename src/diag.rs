@@ -85,14 +85,19 @@ fn record(d: &Disk) -> Option<(u64, u64, u64)> {
     previous
 }
 
-pub fn report() -> Option<Report> {
-    let d = disk()?;
-    let snaps = stdout_of("tmutil", &["listlocalsnapshots", "/"]);
-    let snapshots: Vec<String> = snaps
+/// Local APFS snapshots. A staged macOS update leaves `com.apple.os.update-*`
+/// entries here, and those pin space that `du` cannot see.
+pub fn snapshots() -> Vec<String> {
+    stdout_of("tmutil", &["listlocalsnapshots", "/"])
         .lines()
         .filter(|l| l.starts_with("com.apple"))
         .map(str::to_string)
-        .collect();
+        .collect()
+}
+
+pub fn report() -> Option<Report> {
+    let d = disk()?;
+    let snapshots = snapshots();
     let update_snapshot_pinned = snapshots.iter().any(|n| n.contains("com.apple.os.update"));
 
     let since_last = record(&d).map(|(previous_at, pu, pf)| {
