@@ -21,6 +21,51 @@ pub fn log_path() -> PathBuf {
     home().join("Library/Logs/mac-headroom.log")
 }
 
+/// One line per completed routine. The log only captures what launchd
+/// redirects, so a run started by hand would otherwise leave no trace.
+fn runs_path() -> PathBuf {
+    crate::util::state_dir().join("runs.tsv")
+}
+
+fn record_run(before: Option<u64>, after: Option<u64>) {
+    use std::io::Write;
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(runs_path())
+    {
+        let _ = writeln!(
+            f,
+            "{}\t{}\t{}",
+            crate::util::now(),
+            before.unwrap_or(0),
+            after.unwrap_or(0)
+        );
+    }
+}
+
+fn last_run() -> Option<String> {
+    let text = fs::read_to_string(runs_path()).ok()?;
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?;
+    let mut f = line.split('\t');
+    let at: u64 = f.next()?.parse().ok()?;
+    let before: u64 = f.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let after: u64 = f.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let stamp = stdout_of("date", &["-r", &at.to_string(), "+%-d %b %Y, %H:%M"]);
+    let stamp = stamp.trim();
+    Some(format!(
+        "{} ({}) — {} free before, {} free after",
+        if stamp.is_empty() {
+            at.to_string()
+        } else {
+            stamp.to_string()
+        },
+        crate::util::ago(at),
+        human(before),
+        human(after)
+    ))
+}
+
 fn uid() -> String {
     stdout_of("id", &["-u"]).trim().to_string()
 }
@@ -263,11 +308,13 @@ pub fn status() -> Status {
         }
         _ => None,
     };
-    let last_run = fs::read_to_string(log_path()).ok().and_then(|s| {
-        s.lines()
-            .rev()
-            .find(|l| l.contains("=== done"))
-            .map(str::to_string)
+    let last_run = last_run().or_else(|| {
+        fs::read_to_string(log_path()).ok().and_then(|s| {
+            s.lines()
+                .rev()
+                .find(|l| l.contains("=== done"))
+                .map(str::to_string)
+        })
     });
     Status {
         installed: plist.exists(),
@@ -370,6 +417,7 @@ pub fn run(only: &[String], growth: bool) {
     println!();
     let report = crate::run_clean(false, true, only);
     let free_after = crate::diag::disk().map(|d| d.free);
+    record_run(free_before, free_after);
     println!();
     match (free_before, free_after) {
         (Some(b), Some(a)) => println!(
