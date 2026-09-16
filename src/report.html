@@ -28,7 +28,16 @@ h2{font-size:12px;font-weight:600;margin:0 0 18px;text-transform:uppercase;lette
 header{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap;
   padding-bottom:14px;border-bottom:1px solid var(--ink)}
 section{padding:32px 0;border-bottom:1px solid var(--rule)}
-section:last-child{border-bottom:0}
+.panel section:last-child{border-bottom:0}
+[hidden]{display:none!important}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-top:28px;overflow-x:auto}
+.tabs button{appearance:none;-webkit-appearance:none;background:none;border:0;border-radius:0;
+  font:inherit;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap;
+  padding:11px 15px;margin:0 0 -1px;border-bottom:2px solid transparent}
+.tabs button:hover:not([aria-selected="true"]){color:var(--ink2)}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+.tabs .n{font-weight:400;color:var(--muted);margin-left:6px;font-variant-numeric:tabular-nums}
+.tabs button[aria-selected="true"] .n{color:var(--ink2)}
 .num{font-variant-numeric:tabular-nums}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .ink2{color:var(--ink2)}.muted{color:var(--muted)}
@@ -126,13 +135,24 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
 </header>
 <div id="tip"></div>
 <div class="verdict" id="verdict"></div>
-<section id="disk"></section>
-<section id="volumes"></section>
-<section id="history"></section>
-<section id="space"></section>
-<section id="job"></section>
-<section id="cleaners"></section>
-<section id="audit"></section>
+<nav class="tabs" id="tabs" role="tablist" aria-label="Report sections">
+  <button role="tab" data-panel="space" aria-controls="p-space" aria-selected="true">Space</button>
+  <button role="tab" data-panel="cleaning" aria-controls="p-cleaning" aria-selected="false">Cleaning<span class="n" id="nClean"></span></button>
+  <button role="tab" data-panel="deletions" aria-controls="p-deletions" aria-selected="false">Deletions<span class="n" id="nDel"></span></button>
+</nav>
+<div class="panel" id="p-space" role="tabpanel" aria-labelledby="tabs">
+  <section id="disk"></section>
+  <section id="volumes"></section>
+  <section id="history"></section>
+  <section id="space"></section>
+</div>
+<div class="panel" id="p-cleaning" role="tabpanel" aria-labelledby="tabs" hidden>
+  <section id="job"></section>
+  <section id="cleaners"></section>
+</div>
+<div class="panel" id="p-deletions" role="tabpanel" aria-labelledby="tabs" hidden>
+  <section id="audit"></section>
+</div>
 </main>
 <script id="data" type="application/json">__DATA__</script>
 <script>
@@ -527,6 +547,51 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <tr><th>When</th><th>Cleaner</th><th>Result</th><th class="r">Size</th><th>Path or command</th></tr>
       ${A.map(a => `<tr><td style="white-space:nowrap">${when(a.at)}</td><td class="mono">${esc(a.cleaner)}</td><td>${esc(a.result)}</td><td class="r">${a.bytes ? h(a.bytes) : ''}</td><td class="mono">${esc(tilde(a.path))}</td></tr>`).join('')}
     </table></div>`;
+})();
+
+/* ---------- Tabs ---------- */
+(() => {
+  const tabs = [...document.querySelectorAll('#tabs button')];
+  const names = tabs.map(t => t.dataset.panel);
+  const show = name => {
+    tabs.forEach(t => {
+      const on = t.dataset.panel === name;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      $('p-' + t.dataset.panel).hidden = !on;
+    });
+    // Remembering the tab is a convenience; a private window may refuse.
+    try { localStorage.setItem('mh-tab', name); } catch (e) { /* not important */ }
+    if (location.hash.slice(1) !== name) {
+      try { history.replaceState(null, '', '#' + name); } catch (e) { /* file:// */ }
+    }
+    hideTip();
+  };
+  tabs.forEach(t => { t.onclick = () => show(t.dataset.panel); });
+  $('tabs').addEventListener('keydown', e => {
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = tabs[(i + step + tabs.length) % tabs.length];
+    next.focus();
+    show(next.dataset.panel);
+  });
+
+  const enabled = (D.cleaners || []).filter(c => !c.disabled).length;
+  if (enabled) $('nClean').textContent = enabled;
+  if ((D.audit || []).length) $('nDel').textContent = D.audit.length;
+
+  let start = location.hash.slice(1);
+  if (!names.includes(start)) {
+    try { start = localStorage.getItem('mh-tab'); } catch (e) { start = null; }
+  }
+  show(names.includes(start) ? start : 'space');
+  addEventListener('hashchange', () => {
+    const n = location.hash.slice(1);
+    if (names.includes(n)) show(n);
+  });
 })();
 
 document.addEventListener('mousemove', e => {

@@ -108,9 +108,11 @@ points at the binary's absolute path.
 ## Report
 
 `report` writes one self-contained HTML file (no server, no network, no
-external assets) and opens it: disk composition, used and free over time,
-the last growth diff as bars, the weekly job, every cleaner with its reason,
-and the deletion audit. It is read-only and built from saved state, so it
+external assets) and opens it, under three tabs: **Space** (the verdict, disk
+composition, the other volumes sharing the disk, space over time, and the
+breakdown of where it has gone), **Cleaning** (the weekly job and every cleaner
+with its reason), and **Deletions** (the audit trail). Each tab has its own
+URL fragment, so a link can point at one. It is read-only and built from saved state, so it
 never scans or deletes. Use `--no-open` to just write the file, `--out` to
 choose where.
 
