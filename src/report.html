@@ -58,18 +58,31 @@ svg{display:block;width:100%;height:auto}
   border-left:2px solid var(--axis);padding:10px 14px;margin:16px 0 0;max-width:68ch}
 /* tree */
 .tree{margin-top:4px}
-.node{display:grid;grid-template-columns:1fr 92px;gap:14px;align-items:center;padding:3px 0;position:relative}
+.treebar{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:0 0 10px}
+.treebar button{background:none;border:0;padding:0;font:inherit;font-size:13px;color:var(--ink2);
+  cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.treebar button:hover{color:var(--ink)}
+.node{display:grid;grid-template-columns:minmax(0,1fr) 240px 88px;gap:16px;align-items:center;
+  padding:3px 0;border-radius:3px}
 .node:hover{background:var(--surface)}
-.nm{display:flex;align-items:center;gap:9px;min-width:0}
-.nm .bar{height:13px;border-radius:0 2px 2px 0;background:var(--used);flex:none;min-width:2px}
-.nm .bar.pos{background:var(--grow)}.nm .bar.neg{background:var(--shrink)}
+.nm{display:flex;align-items:center;min-width:0}
 .nm .lbl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.nm .lbl .dim{color:var(--muted)}
+.tw{flex:none;width:16px;margin-left:-16px;color:var(--muted);font-size:10px;line-height:1;
+  text-align:center;cursor:pointer;user-select:none}
+.tw.leaf{cursor:default;opacity:0}
+.node.open>.nm>.tw{transform:rotate(90deg)}
+.track{position:relative;height:13px}
+.track .bar{position:absolute;top:0;height:13px;background:var(--used);border-radius:0 2px 2px 0;min-width:2px}
+.track .bar.pos{background:var(--grow)}
+.track .bar.neg{background:var(--shrink);border-radius:2px 0 0 2px}
+.track .mid{position:absolute;top:-2px;bottom:-2px;left:50%;width:1px;background:var(--axis)}
 .node .amt{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink2)}
 .node.rest .lbl,.node.rest .amt{color:var(--muted);font-style:italic}
-.node.rest .bar{opacity:.35}
+.node.rest .bar{opacity:.3}
+.node.sum{font-weight:600}
+.node.sum .amt{color:var(--ink)}
 .tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:3px;border:1px solid var(--axis);
-  color:var(--muted);margin-left:6px;font-style:normal}
+  color:var(--muted);margin-left:6px;font-style:normal;font-weight:400}
 /* tables */
 table{border-collapse:collapse;width:100%;font-size:13px}
 th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;
@@ -91,7 +104,8 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
 #tip b{font-weight:600}
 @media (max-width:560px){
   .figs{gap:22px}.fig.lead .v{font-size:32px}.verdict .head{font-size:21px}
-  .node{grid-template-columns:1fr 78px;gap:10px}
+  .node{grid-template-columns:minmax(0,1fr) 96px;gap:10px}
+  .node .track{display:none}
 }
 </style>
 </head>
@@ -184,6 +198,7 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <span><i class="sw" style="background:var(--other)"></i>system and purgeable ${pc(d.other)}</span>
       <span><i class="sw" style="background:var(--page);box-shadow:inset 0 0 0 1px var(--axis)"></i>free ${pc(d.free)}</span>
     </div>
+    <p class="cap">Every figure here comes from <span class="mono">diskutil</span>. Your data and free space are measured; system and purgeable is what is left over once those two are taken off the capacity, so it covers the sealed macOS system volume, virtual memory, Preboot and Recovery, plus anything snapshots are pinning.</p>
     ${D.snapshots.length ? `<p class="cap">${D.snapshots.length} local snapshot${D.snapshots.length > 1 ? 's' : ''}: <span class="mono">${D.snapshots.map(esc).join('<br>')}</span></p>` : ''}`;
 })();
 
@@ -249,18 +264,16 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
   svg.addEventListener('mouseleave', () => { cross.style.display = 'none'; hideTip(); });
 })();
 
-/* ---------- Where the space is: nested, so nothing is counted twice ---------- */
+/* ---------- Where the space is: nested, reconciled, collapsible ---------- */
 (() => {
-  const el = $('space'), g = D.growth;
+  const el = $('space'), g = D.growth, d = D.disk;
   if (!g) {
     el.innerHTML = '<h2>Where the space is</h2><p class="empty">No scan saved yet. Run <span class="mono">mac-headroom growth</span> once for a baseline, then again later for the difference. The weekly job does both for you.</p>';
     return;
   }
   const diff = g.previous_at != null;
   const val = e => diff ? e.delta : e.bytes;
-  const rootTotal = diff
-    ? Math.max(Math.abs(g.total - g.previous_total), ...g.entries.map(e => Math.abs(val(e))), 1)
-    : g.total;
+  const leaf = p => tilde(p).split('/').pop() || tilde(p);
 
   /* Nest entries by path so a parent never sits beside its own child. */
   const byPath = new Map(g.entries.map(e => [e.path, { ...e, kids: [] }]));
@@ -272,50 +285,108 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
     }
     (parent ? byPath.get(parent).kids : roots).push(node);
   }
-  const order = (a, b) => Math.abs(val(b)) - Math.abs(val(a));
+
   const rows = [];
   const walk = (nodes, depth) => {
-    nodes.sort(order);
+    nodes.sort((a, b) => Math.abs(val(b)) - Math.abs(val(a)));
     for (const n of nodes) {
-      rows.push({ node: n, depth });
+      rows.push({ label: leaf(n.path), full: n.path, v: val(n), depth, node: n, parent: n.kids.length > 0 });
       if (n.kids.length) {
         walk(n.kids, depth + 1);
         const rest = val(n) - n.kids.reduce((s, k) => s + val(k), 0);
-        if (Math.abs(rest) >= g.min_bytes) rows.push({ node: n, depth: depth + 1, rest });
+        if (Math.abs(rest) >= g.min_bytes) {
+          rows.push({ label: 'everything else in ' + leaf(n.path), full: n.path, v: rest, depth: depth + 1, rest: true });
+        }
       }
     }
   };
-  walk(roots, 0);
+
+  /* In baseline mode the scan covers only ~, but the disk figure covers the whole
+     data volume. Show that difference rather than letting the reader wonder. */
+  const reconcile = !diff && d && d.used > g.total;
+  const outside = reconcile ? d.used - g.total : 0;
+  const scale = reconcile ? d.used : Math.max(g.total, 1);
+  if (reconcile) {
+    rows.push({ label: 'Your data', v: d.used, depth: 0, parent: true, sum: true,
+      tipText: 'Volume Used Space, straight from diskutil. Everything stored on the data volume.' });
+    rows.push({ label: '~ (your home folder)', full: g.root, v: g.total, depth: 1, parent: true,
+      tipText: 'The only place mac-headroom scans by default, ' + g.depth + ' levels deep.' });
+    walk(roots, 2);
+    const rest = g.total - roots.reduce((s, k) => s + val(k), 0);
+    if (Math.abs(rest) >= g.min_bytes) {
+      rows.push({ label: 'everything else in ~', full: g.root, v: rest, depth: 2, rest: true });
+    }
+    rows.push({ label: 'elsewhere on the data volume', v: outside, depth: 1, rest: true,
+      tipText: 'Everything on the data volume that is not under your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like. Not scanned. Point growth at one of those paths to break it down.' });
+  } else {
+    walk(roots, 0);
+  }
+
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.v)), 1);
+  const denom = diff ? maxAbs : scale;
 
   const head = diff
     ? `Compared with the scan ${ago(g.previous_at)}, this directory changed by <b>${sg(g.total - g.previous_total)}</b>, from ${h(g.previous_total)} to ${h(g.total)}. Changes of ${h(g.min_bytes)} or more.`
-    : `${h(g.total)} under <span class="mono">${esc(tilde(g.root))}</span>, ${g.depth} levels deep. Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space.`;
+    : reconcile
+      ? `Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space. Bars are shares of your ${h(d.used)} of data. Only <span class="mono">~</span> is scanned, ${g.depth} levels deep.`
+      : `${h(g.total)} under <span class="mono">${esc(tilde(g.root))}</span>, ${g.depth} levels deep. Indented rows sit <em>inside</em> the row above.`;
 
-  const render = r => {
-    const n = r.node, v = r.rest !== undefined ? r.rest : val(n);
-    const w = Math.max(0.4, 100 * Math.abs(v) / rootTotal);
-    const name = r.rest !== undefined
-      ? 'everything else in ' + (tilde(n.path).split('/').pop() || tilde(n.path))
-      : tilde(n.path).split('/').pop() || tilde(n.path);
-    const cls = diff ? (v >= 0 ? 'pos' : 'neg') : '';
-    const tag = r.rest !== undefined ? ''
-      : diff && n.previous == null ? '<span class="tag">new</span>'
-      : diff && n.bytes === 0 ? '<span class="tag">gone</span>' : '';
-    const tipHtml = r.rest !== undefined
-      ? `<b>${esc(tilde(n.path))}</b><br>not in any row below it: ${h(v)}`
-      : `<b>${esc(tilde(n.path))}</b><br>now ${h(n.bytes)}` + (diff ? `<br>before ${n.previous == null ? 'not present' : h(n.previous)}<br>change ${sg(n.delta)}` : '');
-    return `<div class="node${r.rest !== undefined ? ' rest' : ''}" data-tip="${esc(tipHtml)}">
-      <div class="nm" style="padding-left:${r.depth * 20}px">
-        <span class="bar ${cls}" style="width:${w}%"></span>
-        <span class="lbl">${esc(name)}${tag}</span>
+  const render = (r, i) => {
+    const w = Math.max(0.6, 100 * Math.abs(r.v) / denom) / (diff ? 2 : 1);
+    const cls = diff ? (r.v >= 0 ? 'pos' : 'neg') : '';
+    const bar = diff
+      ? `<div class="mid"></div><div class="bar ${cls}" style="${r.v >= 0 ? 'left' : 'right'}:50%;width:${w}%"></div>`
+      : `<div class="bar" style="left:0;width:${w}%"></div>`;
+    const tag = r.rest || !r.node ? ''
+      : diff && r.node.previous == null ? '<span class="tag">new</span>'
+      : diff && r.node.bytes === 0 ? '<span class="tag">gone</span>' : '';
+    const tipHtml = r.tipText ? `<b>${esc(r.label)}</b><br>${esc(r.tipText)}`
+      : r.rest ? `<b>${esc(tilde(r.full || ''))}</b><br>not in any row below it: ${h(r.v)}`
+      : `<b>${esc(tilde(r.full))}</b><br>now ${h(r.node.bytes)}` + (diff ? `<br>before ${r.node.previous == null ? 'not present' : h(r.node.previous)}<br>change ${sg(r.node.delta)}` : '');
+    return `<div class="node${r.rest ? ' rest' : ''}${r.sum ? ' sum' : ''}${r.parent ? ' open' : ''}" data-i="${i}" data-tip="${esc(tipHtml)}">
+      <div class="nm" style="padding-left:${r.depth * 20 + 16}px">
+        <span class="tw${r.parent ? '' : ' leaf'}">${r.parent ? '▶' : ''}</span>
+        <span class="lbl">${esc(r.label)}${tag}</span>
       </div>
-      <div class="amt">${diff ? sg(v) : h(v)}</div></div>`;
+      <div class="track">${bar}</div>
+      <div class="amt">${diff ? sg(r.v) : h(r.v)}</div></div>`;
   };
 
   el.innerHTML = `<h2>${diff ? 'What changed' : 'Where the space is'}</h2>
     <p class="cap" style="margin:0 0 18px">${head}</p>
     ${diff ? '<div class="keys" style="margin-bottom:12px"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>' : ''}
-    <div class="tree">${rows.length ? rows.map(render).join('') : '<p class="empty">Nothing changed by that much.</p>'}</div>`;
+    <div class="treebar"><span class="muted" id="treecount"></span><span><button id="expand">expand all</button> · <button id="collapse">collapse all</button></span></div>
+    <div class="tree" id="tree">${rows.length ? rows.map(render).join('') : '<p class="empty">Nothing changed by that much.</p>'}</div>`;
+
+  if (!rows.length) return;
+  const els = [...el.querySelectorAll('.node')];
+  /* Start with the top couple of levels open; deeper folders are opt-in. */
+  const collapsed = new Set(rows.map((r, i) => r.parent && r.depth >= (reconcile ? 2 : 1) ? i : -1).filter(i => i >= 0));
+
+  function refresh() {
+    let hideBelow = Infinity, shown = 0;
+    rows.forEach((r, i) => {
+      const hidden = r.depth > hideBelow;
+      if (!hidden) { hideBelow = collapsed.has(i) ? r.depth : Infinity; shown++; }
+      els[i].style.display = hidden ? 'none' : '';
+      els[i].classList.toggle('open', r.parent && !collapsed.has(i));
+    });
+    $('treecount').textContent = `${shown} of ${rows.length} rows`;
+  }
+  el.querySelector('#tree').addEventListener('click', e => {
+    const row = e.target.closest('.node');
+    if (!row) return;
+    const i = +row.dataset.i;
+    if (!rows[i].parent) return;
+    collapsed.has(i) ? collapsed.delete(i) : collapsed.add(i);
+    refresh();
+  });
+  $('expand').addEventListener('click', () => { collapsed.clear(); refresh(); });
+  $('collapse').addEventListener('click', () => {
+    rows.forEach((r, i) => { if (r.parent && r.depth >= (reconcile ? 1 : 0)) collapsed.add(i); });
+    refresh();
+  });
+  refresh();
 })();
 
 /* ---------- Weekly job ---------- */

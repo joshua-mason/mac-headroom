@@ -23,7 +23,10 @@ writes a self-contained HTML page and opens it in their browser. It is read-only
    hunting for files: the space is held by an APFS snapshot or purgeable space and
    no directory scan will find it. Tell the user to install the pending macOS update
    and reboot.
-2. If `assessment` is `files_grew`, run `mac-headroom --json growth`. Report the entries
+2. If `assessment` is `files_grew`, run `mac-headroom --json growth`. Note it scans the
+   home directory only. On most machines that is roughly two thirds of the data volume;
+   the rest is `/Applications`, `/Library`, `/opt/homebrew` and `/private/var`, and you
+   reach those by passing the path (`mac-headroom --json growth /Library`). Report the entries
    with the largest positive `delta`. Look at what the directory actually is before
    suggesting deletion. A 30GB growth in a project folder may be a training run in
    progress, not garbage.

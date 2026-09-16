@@ -45,7 +45,9 @@ always a staged macOS update snapshot, and the fix is to install it and reboot.
 This exact failure mode hid 14GB for months before this tool existed.
 
 `growth` walks a root once, records the size of every path to a given depth,
-and diffs against the previous scan. New and deleted paths are included.
+and diffs against the previous scan. New and deleted paths are included. It
+defaults to your home directory, which is usually about two thirds of the data
+volume; pass a path to scan `/Library`, `/Applications` or anywhere else.
 
 ## Your own cleaners
 
