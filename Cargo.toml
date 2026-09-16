@@ -1,9 +1,15 @@
 [package]
 name = "mac-headroom"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 description = "Disk pressure diagnostician and cache cleaner for macOS developers"
 license = "MIT"
+repository = "https://github.com/joshua-mason/mac-headroom"
+homepage = "https://github.com/joshua-mason/mac-headroom"
+readme = "README.md"
+keywords = ["disk", "storage", "macos", "cleanup", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+exclude = ["/.github", "/out", "/skill"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

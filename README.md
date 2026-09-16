@@ -157,9 +157,25 @@ tells the agent the order of operations and the deletion rules.
 ## Install
 
 ```
-cargo install --path .
+cargo install --git https://github.com/joshua-mason/mac-headroom --tag v0.1.0
+```
+
+Or from a clone, `cargo install --path .`. Either way the binary lands in
+`~/.cargo/bin`, which is where the weekly job will point at it, so install it
+somewhere stable before running `schedule install`.
+
+Then, in order:
+
+```
+mac-headroom diagnose          # is anything hiding?
+mac-headroom growth            # a baseline of where the space is
+mac-headroom config init       # optional: your own cleaners and extra scan roots
+mac-headroom clean             # dry run, read what it would remove and why
+mac-headroom schedule install  # weekly clean, plus the hourly low space watch
+mac-headroom report            # the whole picture in a browser
 ```
 
 ## Status
 
-Working proof of concept. Not yet: Homebrew packaging.
+0.1.0, the first tagged release. Working on macOS 15 and 26 on Apple silicon.
+Not yet: Homebrew packaging, or prebuilt binaries.
