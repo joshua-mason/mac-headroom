@@ -19,6 +19,11 @@ pub struct Config {
     /// Built-in cleaners to leave out of a plain `clean`. Still runnable with --only.
     #[serde(default)]
     pub disable: Vec<String>,
+    /// Extra directories to include in the space breakdown, beyond your home
+    /// folder. Absolute paths. Scanning a system directory without sudo skips
+    /// what it cannot read, and the report says so.
+    #[serde(default)]
+    pub scan_roots: Vec<String>,
     #[serde(default, rename = "cleaner")]
     pub cleaners: Vec<Cleaner>,
 }
@@ -41,6 +46,14 @@ pub fn validate(cfg: &Config) -> Vec<String> {
             problems.push(format!(
                 "disable: {d:?} is not a built-in cleaner (see `mac-headroom list`)"
             ));
+        }
+    }
+    for r in &cfg.scan_roots {
+        let p = std::path::Path::new(r);
+        if !p.is_absolute() {
+            problems.push(format!("scan_roots: {r:?} must be an absolute path"));
+        } else if !p.is_dir() {
+            problems.push(format!("scan_roots: {r:?} is not a directory"));
         }
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -76,6 +89,13 @@ pub fn merge(cfg: &Config) -> Vec<Cleaner> {
 
 /// The cleaner set every command works from. Refuses to proceed on a bad config,
 /// because a half-understood config is exactly how the wrong thing gets deleted.
+/// Extra roots the space breakdown should cover, from the config.
+pub fn scan_roots() -> Vec<PathBuf> {
+    load()
+        .map(|c| c.scan_roots.iter().map(PathBuf::from).collect())
+        .unwrap_or_default()
+}
+
 pub fn all_cleaners() -> Result<Vec<Cleaner>, String> {
     let cfg = load()?;
     let problems = validate(&cfg);
@@ -99,6 +119,12 @@ pub const EXAMPLE: &str = r#"# mac-headroom configuration
 # Built-in cleaners to leave out of a plain `clean`. They can still be run
 # explicitly with --only. Names are in `mac-headroom list`.
 disable = []
+
+# Directories outside your home folder to include in the space breakdown.
+# Without these, `growth` and the report only ever see ~, which on most Macs is
+# about two thirds of the data volume. Scanning these without sudo skips what it
+# cannot read (/private/var especially), and the report marks the figure as a floor.
+scan_roots = ["/Applications", "/Library", "/opt"]
 
 # ---- Examples. Remove the leading # to enable one. ----
 
@@ -160,6 +186,7 @@ pub struct Check {
     pub problems: Vec<String>,
     pub disabled: Vec<String>,
     pub user_cleaners: Vec<String>,
+    pub scan_roots: Vec<String>,
 }
 
 pub fn check() -> Check {
@@ -172,6 +199,7 @@ pub fn check() -> Check {
             problems: validate(&cfg),
             disabled: cfg.disable.clone(),
             user_cleaners: cfg.cleaners.iter().map(|c| c.name.clone()).collect(),
+            scan_roots: cfg.scan_roots.clone(),
         },
         Err(e) => Check {
             path: p,
@@ -179,6 +207,7 @@ pub fn check() -> Check {
             problems: vec![e],
             disabled: vec![],
             user_cleaners: vec![],
+            scan_roots: vec![],
         },
     }
 }
@@ -199,6 +228,9 @@ pub fn print_check(c: &Check) {
     if !c.user_cleaners.is_empty() {
         println!("  user cleaners       {}", c.user_cleaners.join(", "));
     }
+    if !c.scan_roots.is_empty() {
+        println!("  extra scan roots    {}", c.scan_roots.join(", "));
+    }
     if c.problems.is_empty() {
         println!("  OK");
     } else {
@@ -216,7 +248,8 @@ mod tests {
     fn example_parses_and_is_empty() {
         let cfg: Config = toml::from_str(EXAMPLE).unwrap();
         assert!(cfg.cleaners.is_empty());
-        assert!(validate(&cfg).is_empty());
+        assert_eq!(cfg.scan_roots.len(), 3);
+        assert!(validate(&cfg).iter().all(|p| p.starts_with("scan_roots")));
     }
 
     #[test]

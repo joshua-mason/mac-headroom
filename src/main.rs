@@ -180,14 +180,28 @@ fn main() {
             min_mb,
             top,
         } => {
-            let root = root
-                .map(|p| PathBuf::from(expand(&p.to_string_lossy())))
-                .unwrap_or_else(home);
-            let r = growth::report(&root, depth, min_mb << 20, top);
+            // With no argument, scan the home folder plus any extra roots from
+            // the config, so the breakdown covers more than two thirds of the
+            // data volume.
+            let roots: Vec<PathBuf> = match root {
+                Some(p) => vec![PathBuf::from(expand(&p.to_string_lossy()))],
+                None => std::iter::once(home())
+                    .chain(config::scan_roots())
+                    .collect(),
+            };
+            let reports: Vec<growth::Report> = roots
+                .iter()
+                .map(|r| growth::report(r, depth, min_mb << 20, top))
+                .collect();
             if cli.json {
-                emit(&r)
+                emit(&reports);
             } else {
-                growth::print_text(&r)
+                for (i, r) in reports.iter().enumerate() {
+                    if i > 0 {
+                        println!();
+                    }
+                    growth::print_text(r);
+                }
             }
         }
         Cmd::Schedule { action } => match action {

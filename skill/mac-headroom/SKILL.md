@@ -25,8 +25,10 @@ writes a self-contained HTML page and opens it in their browser. It is read-only
    and reboot.
 2. If `assessment` is `files_grew`, run `mac-headroom --json growth`. Note it scans the
    home directory only. On most machines that is roughly two thirds of the data volume;
-   the rest is `/Applications`, `/Library`, `/opt/homebrew` and `/private/var`, and you
-   reach those by passing the path (`mac-headroom --json growth /Library`). Report the entries
+   the rest is `/Applications`, `/Library`, `/opt/homebrew` and `/private/var`. Adding
+   those to `scan_roots` in the config makes every scan and the report cover them; a
+   one-off is `mac-headroom --json growth /Library`. A non-zero `skipped` on a report
+   means the figure is a floor, because the scan could not read everything without sudo. Report the entries
    with the largest positive `delta`. Look at what the directory actually is before
    suggesting deletion. A 30GB growth in a project folder may be a training run in
    progress, not garbage.

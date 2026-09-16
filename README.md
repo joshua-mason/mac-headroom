@@ -47,7 +47,17 @@ This exact failure mode hid 14GB for months before this tool existed.
 `growth` walks a root once, records the size of every path to a given depth,
 and diffs against the previous scan. New and deleted paths are included. It
 defaults to your home directory, which is usually about two thirds of the data
-volume; pass a path to scan `/Library`, `/Applications` or anywhere else.
+volume. Name extra directories in the config to cover the rest:
+
+```toml
+scan_roots = ["/Applications", "/Library", "/opt"]
+```
+
+Those are scanned alongside home by `growth`, by the weekly job, and in the
+report, where they nest under one total so nothing is double counted. A scan
+never crosses into another filesystem, so a mounted disk image is not counted
+twice. Without sudo a system directory skips what it cannot read, and the
+count of skipped entries is reported rather than quietly folded in.
 
 ## Your own cleaners
 

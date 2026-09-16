@@ -409,9 +409,16 @@ pub fn run(only: &[String], growth: bool) {
     }
 
     if growth {
-        println!();
-        let r = crate::growth::report(&home(), 3, 100 << 20, 15);
-        crate::growth::print_text(&r);
+        for (i, root) in std::iter::once(home())
+            .chain(crate::config::scan_roots())
+            .enumerate()
+        {
+            println!();
+            if i > 0 {
+                println!("(extra scan root from the config)");
+            }
+            crate::growth::print_text(&crate::growth::report(&root, 3, 100 << 20, 15));
+        }
     }
 
     println!();

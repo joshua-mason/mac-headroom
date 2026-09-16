@@ -62,6 +62,12 @@ svg{display:block;width:100%;height:auto}
 .treebar button{background:none;border:0;padding:0;font:inherit;font-size:13px;color:var(--ink2);
   cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .treebar button:hover{color:var(--ink)}
+.seg{display:inline-flex;border:1px solid var(--axis);border-radius:5px;overflow:hidden;margin-bottom:14px}
+.seg button{text-decoration:none;padding:5px 14px;color:var(--ink2);border-right:1px solid var(--axis)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--page)}
+.seg button[disabled]{opacity:.4;cursor:default}
+.floor{color:var(--muted);font-size:13px;margin:10px 0 0}
 .node{display:grid;grid-template-columns:minmax(0,1fr) 240px 88px;gap:16px;align-items:center;
   padding:3px 0;border-radius:3px}
 .node:hover{background:var(--surface)}
@@ -264,129 +270,159 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
   svg.addEventListener('mouseleave', () => { cross.style.display = 'none'; hideTip(); });
 })();
 
-/* ---------- Where the space is: nested, reconciled, collapsible ---------- */
+/* ---------- Where the space is: one tree, two views ---------- */
 (() => {
   const el = $('space'), g = D.growth, d = D.disk;
   if (!g) {
     el.innerHTML = '<h2>Where the space is</h2><p class="empty">No scan saved yet. Run <span class="mono">mac-headroom growth</span> once for a baseline, then again later for the difference. The weekly job does both for you.</p>';
     return;
   }
-  const diff = g.previous_at != null;
-  const val = e => diff ? e.delta : e.bytes;
-  const leaf = p => tilde(p).split('/').pop() || tilde(p);
+  const extra = D.growth_roots || [];
+  const scans = [g, ...extra];
+  const canChange = scans.some(s => s.previous_at != null);
+  const skipped = scans.reduce((s, r) => s + (r.skipped || 0), 0);
+  const leaf = p => { const t = tilde(p); return t.split('/').filter(Boolean).pop() || t; };
+  let mode = 'size';
 
-  /* Nest entries by path so a parent never sits beside its own child. */
-  const byPath = new Map(g.entries.map(e => [e.path, { ...e, kids: [] }]));
-  const roots = [];
-  for (const node of byPath.values()) {
-    let parent = null, best = -1;
-    for (const p of byPath.keys()) {
-      if (p !== node.path && node.path.startsWith(p + '/') && p.length > best) { best = p.length; parent = p; }
+  /* Nest one scan's entries by path. */
+  function nest(scan) {
+    const byPath = new Map(scan.entries.map(e => [e.path, { ...e, kids: [] }]));
+    const roots = [];
+    for (const node of byPath.values()) {
+      let parent = null, best = -1;
+      for (const p of byPath.keys()) {
+        if (p !== node.path && node.path.startsWith(p + '/') && p.length > best) { best = p.length; parent = p; }
+      }
+      (parent ? byPath.get(parent).kids : roots).push(node);
     }
-    (parent ? byPath.get(parent).kids : roots).push(node);
+    return roots;
   }
 
-  const rows = [];
-  const walk = (nodes, depth) => {
-    nodes.sort((a, b) => Math.abs(val(b)) - Math.abs(val(a)));
-    for (const n of nodes) {
-      rows.push({ label: leaf(n.path), full: n.path, v: val(n), depth, node: n, parent: n.kids.length > 0 });
-      if (n.kids.length) {
-        walk(n.kids, depth + 1);
-        const rest = val(n) - n.kids.reduce((s, k) => s + val(k), 0);
-        if (Math.abs(rest) >= g.min_bytes) {
-          rows.push({ label: 'everything else in ' + leaf(n.path), full: n.path, v: rest, depth: depth + 1, rest: true });
+  function buildRows() {
+    const change = mode === 'change';
+    const val = e => change ? (e.delta || 0) : e.bytes;
+    const keep = e => Math.abs(val(e)) >= g.min_bytes;
+    const rows = [];
+    const walk = (nodes, depth) => {
+      nodes.filter(keep).sort((a, b) => Math.abs(val(b)) - Math.abs(val(a))).forEach(n => {
+        rows.push({ label: leaf(n.path), full: n.path, v: val(n), depth, node: n,
+          parent: n.kids.some(keep) });
+        if (n.kids.some(keep)) {
+          walk(n.kids, depth + 1);
+          const rest = val(n) - n.kids.filter(keep).reduce((s, k) => s + val(k), 0);
+          if (Math.abs(rest) >= g.min_bytes) {
+            rows.push({ label: 'everything else in ' + leaf(n.path), full: n.path, v: rest, depth: depth + 1, rest: true });
+          }
         }
+      });
+    };
+    /* A scan's own subtree: the root row, its contents, then its remainder. */
+    const subtree = (scan, depth, label, tipText, secondary) => {
+      const roots = nest(scan);
+      const total = change ? (scan.previous_total != null ? scan.total - scan.previous_total : 0) : scan.total;
+      rows.push({ label, full: scan.root, v: total, depth, parent: roots.some(keep), tipText,
+        secondary, skipped: scan.skipped });
+      walk(roots, depth + 1);
+      const rest = total - roots.filter(keep).reduce((s, k) => s + val(k), 0);
+      if (Math.abs(rest) >= g.min_bytes) {
+        rows.push({ label: 'everything else in ' + label, full: scan.root, v: rest, depth: depth + 1, rest: true });
+      }
+    };
+
+    const covered = scans.reduce((s, r) => s + (change ? 0 : r.total), 0);
+    const reconcile = !change && d && d.used > covered;
+    if (change) {
+      subtree(g, 0, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
+      extra.forEach(r => subtree(r, 0, tilde(r.root), 'An extra scan root from your config.', true));
+    } else {
+      rows.push({ label: 'Your data', v: d ? d.used : covered, depth: 0, parent: true, sum: true,
+        tipText: 'Volume Used Space, straight from diskutil. Everything stored on the data volume.' });
+      subtree(g, 1, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
+      extra.forEach(r => subtree(r, 1, tilde(r.root), 'An extra scan root from your config.', true));
+      if (reconcile) {
+        rows.push({ label: 'not scanned', v: d.used - covered, depth: 1, rest: true,
+          tipText: extra.length
+            ? 'The rest of the data volume, outside every root that is scanned. Add more paths to scan_roots in the config to break it down.'
+            : 'Everything outside your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like. Add them to scan_roots in the config to break this down.' });
       }
     }
-  };
-
-  /* In baseline mode the scan covers only ~, but the disk figure covers the whole
-     data volume. Show that difference rather than letting the reader wonder. */
-  const reconcile = !diff && d && d.used > g.total;
-  const outside = reconcile ? d.used - g.total : 0;
-  const scale = reconcile ? d.used : Math.max(g.total, 1);
-  if (reconcile) {
-    rows.push({ label: 'Your data', v: d.used, depth: 0, parent: true, sum: true,
-      tipText: 'Volume Used Space, straight from diskutil. Everything stored on the data volume.' });
-    rows.push({ label: '~ (your home folder)', full: g.root, v: g.total, depth: 1, parent: true,
-      tipText: 'The only place mac-headroom scans by default, ' + g.depth + ' levels deep.' });
-    walk(roots, 2);
-    const rest = g.total - roots.reduce((s, k) => s + val(k), 0);
-    if (Math.abs(rest) >= g.min_bytes) {
-      rows.push({ label: 'everything else in ~', full: g.root, v: rest, depth: 2, rest: true });
-    }
-    rows.push({ label: 'elsewhere on the data volume', v: outside, depth: 1, rest: true,
-      tipText: 'Everything on the data volume that is not under your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like. Not scanned. Point growth at one of those paths to break it down.' });
-  } else {
-    walk(roots, 0);
+    return rows;
   }
 
-  const maxAbs = Math.max(...rows.map(r => Math.abs(r.v)), 1);
-  const denom = diff ? maxAbs : scale;
+  function draw() {
+    const change = mode === 'change';
+    const rows = buildRows();
+    const denom = Math.max(...rows.map(r => Math.abs(r.v)), 1);
+    const render = (r, i) => {
+      const w = Math.max(0.6, 100 * Math.abs(r.v) / denom) / (change ? 2 : 1);
+      const bar = change
+        ? `<div class="mid"></div><div class="bar ${r.v >= 0 ? 'pos' : 'neg'}" style="${r.v >= 0 ? 'left' : 'right'}:50%;width:${w}%"></div>`
+        : `<div class="bar" style="left:0;width:${w}%"></div>`;
+      const tag = r.rest || !r.node ? ''
+        : change && r.node.previous == null ? '<span class="tag">new</span>'
+        : change && r.node.bytes === 0 ? '<span class="tag">gone</span>' : '';
+      const tipHtml = r.tipText ? `<b>${esc(r.label)}</b><br>${esc(r.tipText)}`
+        : r.rest ? `<b>${esc(tilde(r.full || ''))}</b><br>not in any row below it: ${change ? sg(r.v) : h(r.v)}`
+        : `<b>${esc(tilde(r.full))}</b><br>now ${h(r.node.bytes)}` + (r.node.delta != null ? `<br>before ${r.node.previous == null ? 'not present' : h(r.node.previous)}<br>change ${sg(r.node.delta)}` : '');
+      return `<div class="node${r.rest ? ' rest' : ''}${r.sum ? ' sum' : ''}${r.parent ? ' open' : ''}" data-i="${i}" data-tip="${esc(tipHtml)}">
+        <div class="nm" style="padding-left:${r.depth * 20 + 16}px">
+          <span class="tw${r.parent ? '' : ' leaf'}">${r.parent ? '▶' : ''}</span>
+          <span class="lbl">${esc(r.label)}${tag}</span>
+        </div>
+        <div class="track">${bar}</div>
+        <div class="amt">${change ? sg(r.v) : h(r.v)}</div></div>`;
+    };
+    $('tree').innerHTML = rows.length ? rows.map(render).join('')
+      : '<p class="empty">Nothing changed by that much.</p>';
+    $('caption').innerHTML = change
+      ? `Change since the scan ${ago(g.previous_at)}. Only movements of ${h(g.min_bytes)} or more.`
+      : `Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space.${extra.length ? '' : ' Only <span class="mono">~</span> is scanned; add paths to <span class="mono">scan_roots</span> in the config to cover the rest of the volume.'}`;
+    $('key').style.display = change ? '' : 'none';
 
-  const head = diff
-    ? `Compared with the scan ${ago(g.previous_at)}, this directory changed by <b>${sg(g.total - g.previous_total)}</b>, from ${h(g.previous_total)} to ${h(g.total)}. Changes of ${h(g.min_bytes)} or more.`
-    : reconcile
-      ? `Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space. Bars are shares of your ${h(d.used)} of data. Only <span class="mono">~</span> is scanned, ${g.depth} levels deep.`
-      : `${h(g.total)} under <span class="mono">${esc(tilde(g.root))}</span>, ${g.depth} levels deep. Indented rows sit <em>inside</em> the row above.`;
+    if (!rows.length) { $('treecount').textContent = ''; return; }
+    const els = [...$('tree').querySelectorAll('.node')];
+    /* Open the home folder to one level; the system roots stay folded so the
+       default view is the part of the disk you actually manage. */
+    const collapsed = new Set(rows
+      .map((r, i) => r.parent && (r.secondary || r.depth >= (change ? 1 : 2)) ? i : -1)
+      .filter(i => i >= 0));
+    const refresh = () => {
+      let hideBelow = Infinity, shown = 0;
+      rows.forEach((r, i) => {
+        const hidden = r.depth > hideBelow;
+        if (!hidden) { hideBelow = collapsed.has(i) ? r.depth : Infinity; shown++; }
+        els[i].style.display = hidden ? 'none' : '';
+        els[i].classList.toggle('open', r.parent && !collapsed.has(i));
+      });
+      $('treecount').textContent = `${shown} of ${rows.length} rows`;
+    };
+    $('tree').onclick = e => {
+      const row = e.target.closest('.node');
+      if (!row) return;
+      const i = +row.dataset.i;
+      if (!rows[i].parent) return;
+      collapsed.has(i) ? collapsed.delete(i) : collapsed.add(i);
+      refresh();
+    };
+    $('expand').onclick = () => { collapsed.clear(); refresh(); };
+    $('collapse').onclick = () => { rows.forEach((r, i) => { if (r.parent && r.depth >= 1) collapsed.add(i); }); refresh(); };
+    refresh();
+  }
 
-  const render = (r, i) => {
-    const w = Math.max(0.6, 100 * Math.abs(r.v) / denom) / (diff ? 2 : 1);
-    const cls = diff ? (r.v >= 0 ? 'pos' : 'neg') : '';
-    const bar = diff
-      ? `<div class="mid"></div><div class="bar ${cls}" style="${r.v >= 0 ? 'left' : 'right'}:50%;width:${w}%"></div>`
-      : `<div class="bar" style="left:0;width:${w}%"></div>`;
-    const tag = r.rest || !r.node ? ''
-      : diff && r.node.previous == null ? '<span class="tag">new</span>'
-      : diff && r.node.bytes === 0 ? '<span class="tag">gone</span>' : '';
-    const tipHtml = r.tipText ? `<b>${esc(r.label)}</b><br>${esc(r.tipText)}`
-      : r.rest ? `<b>${esc(tilde(r.full || ''))}</b><br>not in any row below it: ${h(r.v)}`
-      : `<b>${esc(tilde(r.full))}</b><br>now ${h(r.node.bytes)}` + (diff ? `<br>before ${r.node.previous == null ? 'not present' : h(r.node.previous)}<br>change ${sg(r.node.delta)}` : '');
-    return `<div class="node${r.rest ? ' rest' : ''}${r.sum ? ' sum' : ''}${r.parent ? ' open' : ''}" data-i="${i}" data-tip="${esc(tipHtml)}">
-      <div class="nm" style="padding-left:${r.depth * 20 + 16}px">
-        <span class="tw${r.parent ? '' : ' leaf'}">${r.parent ? '▶' : ''}</span>
-        <span class="lbl">${esc(r.label)}${tag}</span>
-      </div>
-      <div class="track">${bar}</div>
-      <div class="amt">${diff ? sg(r.v) : h(r.v)}</div></div>`;
-  };
-
-  el.innerHTML = `<h2>${diff ? 'What changed' : 'Where the space is'}</h2>
-    <p class="cap" style="margin:0 0 18px">${head}</p>
-    ${diff ? '<div class="keys" style="margin-bottom:12px"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>' : ''}
+  el.innerHTML = `<h2>Where the space is</h2>
+    <div class="seg">
+      <button id="mSize" aria-pressed="true">Size</button>
+      <button id="mChange" aria-pressed="false" ${canChange ? '' : 'disabled title="Needs a second scan to compare against"'}>Change</button>
+    </div>
+    <p class="cap" id="caption" style="margin:0 0 14px"></p>
+    <div class="keys" id="key" style="margin-bottom:12px;display:none"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>
     <div class="treebar"><span class="muted" id="treecount"></span><span><button id="expand">expand all</button> · <button id="collapse">collapse all</button></span></div>
-    <div class="tree" id="tree">${rows.length ? rows.map(render).join('') : '<p class="empty">Nothing changed by that much.</p>'}</div>`;
-
-  if (!rows.length) return;
-  const els = [...el.querySelectorAll('.node')];
-  /* Start with the top couple of levels open; deeper folders are opt-in. */
-  const collapsed = new Set(rows.map((r, i) => r.parent && r.depth >= (reconcile ? 2 : 1) ? i : -1).filter(i => i >= 0));
-
-  function refresh() {
-    let hideBelow = Infinity, shown = 0;
-    rows.forEach((r, i) => {
-      const hidden = r.depth > hideBelow;
-      if (!hidden) { hideBelow = collapsed.has(i) ? r.depth : Infinity; shown++; }
-      els[i].style.display = hidden ? 'none' : '';
-      els[i].classList.toggle('open', r.parent && !collapsed.has(i));
-    });
-    $('treecount').textContent = `${shown} of ${rows.length} rows`;
-  }
-  el.querySelector('#tree').addEventListener('click', e => {
-    const row = e.target.closest('.node');
-    if (!row) return;
-    const i = +row.dataset.i;
-    if (!rows[i].parent) return;
-    collapsed.has(i) ? collapsed.delete(i) : collapsed.add(i);
-    refresh();
-  });
-  $('expand').addEventListener('click', () => { collapsed.clear(); refresh(); });
-  $('collapse').addEventListener('click', () => {
-    rows.forEach((r, i) => { if (r.parent && r.depth >= (reconcile ? 1 : 0)) collapsed.add(i); });
-    refresh();
-  });
-  refresh();
+    <div class="tree" id="tree"></div>
+    ${skipped ? `<p class="floor">${skipped.toLocaleString()} entries could not be read, almost always inside a system directory, so those totals are a floor rather than the whole figure. Running a scan with sudo would close the gap.</p>` : ''}`;
+  const set = m => { mode = m; $('mSize').setAttribute('aria-pressed', m === 'size'); $('mChange').setAttribute('aria-pressed', m === 'change'); draw(); };
+  $('mSize').onclick = () => set('size');
+  $('mChange').onclick = () => { if (canChange) set('change'); };
+  draw();
 })();
 
 /* ---------- Weekly job ---------- */

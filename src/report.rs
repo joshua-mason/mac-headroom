@@ -37,6 +37,9 @@ pub struct Data {
     history: Vec<Reading>,
     #[serde(skip_serializing_if = "Option::is_none")]
     growth: Option<crate::growth::Report>,
+    /// One per extra root in the config, so the page can show the part of the
+    /// data volume that is not in the home folder.
+    growth_roots: Vec<crate::growth::Report>,
     config: crate::config::Check,
     cleaners: Vec<crate::cleaners::Cleaner>,
     schedule: crate::schedule::Status,
@@ -128,7 +131,16 @@ pub fn gather() -> Data {
         history: history(),
         // More entries than the terminal shows: the page nests them into a
         // tree, so it needs the parents as well as the leaves.
-        growth: crate::growth::from_saved(&home(), 3, 100 << 20, 60),
+        // Ranked by size, not by change: the page renders the size view and
+        // the change view from the same list, and a change-ranked list would
+        // silently drop everything that did not move.
+        growth: crate::growth::from_saved(&home(), 3, 100 << 20, 80, crate::growth::Rank::Size),
+        growth_roots: crate::config::scan_roots()
+            .iter()
+            .filter_map(|r| {
+                crate::growth::from_saved(r, 3, 100 << 20, 40, crate::growth::Rank::Size)
+            })
+            .collect(),
         config: crate::config::check(),
         cleaners,
         schedule: crate::schedule::status(),

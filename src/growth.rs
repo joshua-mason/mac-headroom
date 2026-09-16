@@ -12,15 +12,25 @@ use std::path::{Path, PathBuf};
 
 pub type Sizes = BTreeMap<PathBuf, u64>;
 
-pub fn scan(root: &Path, depth: usize) -> Sizes {
+/// Walk a root, accumulating physical size into every ancestor up to `depth`.
+/// Returns the sizes and a count of entries that could not be read, which is
+/// how an unprivileged scan of a system directory quietly undercounts.
+pub fn scan(root: &Path, depth: usize) -> (Sizes, u64) {
     let mut sizes = Sizes::new();
+    let mut skipped = 0u64;
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .same_file_system(true)
-        .into_iter()
-        .filter_map(Result::ok);
+        .into_iter();
     for entry in walker {
-        let Ok(md) = entry.metadata() else { continue };
+        let Ok(entry) = entry else {
+            skipped += 1;
+            continue;
+        };
+        let Ok(md) = entry.metadata() else {
+            skipped += 1;
+            continue;
+        };
         if !md.is_file() {
             continue;
         }
@@ -33,7 +43,7 @@ pub fn scan(root: &Path, depth: usize) -> Sizes {
             *sizes.entry(acc.clone()).or_default() += bytes;
         }
     }
-    sizes
+    (sizes, skipped)
 }
 
 fn slug(root: &Path) -> String {
@@ -52,10 +62,9 @@ fn scan_prefix(root: &Path, depth: usize) -> String {
     format!("{}.d{depth}.", slug(root))
 }
 
-fn save(root: &Path, depth: usize, sizes: &Sizes, at: u64) -> std::io::Result<()> {
-    let body: String = sizes
-        .iter()
-        .map(|(p, b)| format!("{b}\t{}\n", p.display()))
+fn save(root: &Path, depth: usize, sizes: &Sizes, skipped: u64, at: u64) -> std::io::Result<()> {
+    let body: String = std::iter::once(format!("#skipped\t{skipped}\n"))
+        .chain(sizes.iter().map(|(p, b)| format!("{b}\t{}\n", p.display())))
         .collect();
     fs::write(
         scans_dir().join(format!("{}{at}.tsv", scan_prefix(root, depth))),
@@ -85,23 +94,27 @@ fn saved_scans(root: &Path, depth: usize) -> Vec<(u64, PathBuf)> {
     found
 }
 
-fn read_scan(path: &Path) -> Option<Sizes> {
-    Some(
-        fs::read_to_string(path)
-            .ok()?
-            .lines()
-            .filter_map(|l| {
-                let (b, p) = l.split_once('\t')?;
-                Some((PathBuf::from(p), b.parse().ok()?))
-            })
-            .collect(),
-    )
+fn read_scan(path: &Path) -> Option<(Sizes, u64)> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut skipped = 0;
+    let sizes = text
+        .lines()
+        .filter_map(|l| {
+            let (b, p) = l.split_once('\t')?;
+            if b == "#skipped" {
+                skipped = p.parse().unwrap_or(0);
+                return None;
+            }
+            Some((PathBuf::from(p), b.parse().ok()?))
+        })
+        .collect();
+    Some((sizes, skipped))
 }
 
 /// Most recent previous scan for this root and depth: (timestamp, sizes).
 fn load_previous(root: &Path, depth: usize) -> Option<(u64, Sizes)> {
     let (ts, path) = saved_scans(root, depth).into_iter().next()?;
-    Some((ts, read_scan(&path)?))
+    Some((ts, read_scan(&path)?.0))
 }
 
 #[derive(Serialize)]
@@ -125,41 +138,70 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_total: Option<u64>,
     pub min_bytes: u64,
+    /// Entries the scan could not read. Above zero, every figure is a floor.
+    pub skipped: u64,
     /// With a previous scan: entries whose |delta| >= min_bytes, largest change first.
     /// Without one: the largest entries by size.
     pub entries: Vec<Entry>,
 }
 
+/// How to pick and order the entries a report carries.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Rank {
+    /// Biggest now. Always meaningful, with or without a previous scan.
+    Size,
+    /// Biggest change since the previous scan, when there is one.
+    Change,
+}
+
 pub fn report(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Report {
     let scanned_at = now();
-    let sizes = scan(root, depth);
+    let (sizes, skipped) = scan(root, depth);
     let previous = load_previous(root, depth);
-    if let Err(e) = save(root, depth, &sizes, scanned_at) {
+    if let Err(e) = save(root, depth, &sizes, skipped, scanned_at) {
         eprintln!("warning: could not save scan: {e}");
     }
-    build(root, depth, scanned_at, sizes, previous, min_bytes, top)
+    let rank = if previous.is_some() {
+        Rank::Change
+    } else {
+        Rank::Size
+    };
+    build(
+        root, depth, scanned_at, sizes, skipped, previous, min_bytes, top, rank,
+    )
 }
 
 /// The same report, from the two most recent saved scans, without rescanning.
 /// None if nothing has been scanned yet.
-pub fn from_saved(root: &Path, depth: usize, min_bytes: u64, top: usize) -> Option<Report> {
+pub fn from_saved(
+    root: &Path,
+    depth: usize,
+    min_bytes: u64,
+    top: usize,
+    rank: Rank,
+) -> Option<Report> {
     let mut scans = saved_scans(root, depth).into_iter();
     let (latest_at, latest_path) = scans.next()?;
-    let latest = read_scan(&latest_path)?;
-    let previous = scans.next().and_then(|(ts, p)| Some((ts, read_scan(&p)?)));
+    let (latest, skipped) = read_scan(&latest_path)?;
+    let previous = scans
+        .next()
+        .and_then(|(ts, p)| Some((ts, read_scan(&p)?.0)));
     Some(build(
-        root, depth, latest_at, latest, previous, min_bytes, top,
+        root, depth, latest_at, latest, skipped, previous, min_bytes, top, rank,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     root: &Path,
     depth: usize,
     scanned_at: u64,
     sizes: Sizes,
+    skipped: u64,
     previous: Option<(u64, Sizes)>,
     min_bytes: u64,
     top: usize,
+    rank: Rank,
 ) -> Report {
     let total = sizes.get(root).copied().unwrap_or(0);
 
@@ -200,14 +242,20 @@ fn build(
                         delta: Some(-(b as i64)),
                     }),
             );
-            all.retain(|e| e.delta.unwrap_or(0).unsigned_abs() >= min_bytes);
+            if rank == Rank::Change {
+                all.retain(|e| e.delta.unwrap_or(0).unsigned_abs() >= min_bytes);
+            } else {
+                all.retain(|e| e.bytes >= min_bytes);
+            }
             all
         }
     };
 
-    match previous {
-        None => entries.sort_by_key(|e| std::cmp::Reverse(e.bytes)),
-        Some(_) => entries.sort_by_key(|e| std::cmp::Reverse(e.delta.unwrap_or(0).unsigned_abs())),
+    match rank {
+        Rank::Size => entries.sort_by_key(|e| std::cmp::Reverse(e.bytes)),
+        Rank::Change => {
+            entries.sort_by_key(|e| std::cmp::Reverse(e.delta.unwrap_or(0).unsigned_abs()))
+        }
     }
     entries.truncate(top);
 
@@ -219,12 +267,19 @@ fn build(
         previous_at: previous.as_ref().map(|(t, _)| *t),
         previous_total: previous.as_ref().and_then(|(_, s)| s.get(root).copied()),
         min_bytes,
+        skipped,
         entries,
     }
 }
 
 pub fn print_text(r: &Report) {
     println!("{}  {} (depth {})", tilde(&r.root), human(r.total), r.depth);
+    if r.skipped > 0 {
+        println!(
+            "  {} entries could not be read, so these figures are a floor. Re-run with sudo for the full picture.",
+            r.skipped
+        );
+    }
     match (r.previous_at, r.previous_total) {
         (Some(at), Some(prev_total)) => {
             println!(
@@ -272,7 +327,7 @@ mod tests {
         fs::create_dir_all(root.join("a/b")).unwrap();
         fs::write(root.join("a/b/f1"), vec![0u8; 8192]).unwrap();
         fs::write(root.join("a/f2"), vec![0u8; 4096]).unwrap();
-        let sizes = scan(&root, 2);
+        let (sizes, _) = scan(&root, 2);
         let a = sizes[&root.join("a")];
         let ab = sizes[&root.join("a/b")];
         assert_eq!(sizes[&root], a);
