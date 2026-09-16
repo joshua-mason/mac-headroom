@@ -63,6 +63,32 @@ never crosses into another filesystem, so a mounted disk image is not counted
 twice. Without sudo a system directory skips what it cannot read, and the
 count of skipped entries is reported rather than quietly folded in.
 
+## Files an app has lost track of
+
+Some apps keep their media on disk and their record of it in a database. Replace
+the database and the files are stranded: nothing points at them, and the app's
+own storage screen never offers to remove them, because it reports what the
+database knows. WhatsApp does this whenever you re-link a Mac as a device. On
+the machine this was written on, that left 16GB across 55,607 files while the
+app reported a few hundred megabytes.
+
+```
+mac-headroom clean --only whatsapp-orphans          # dry run
+mac-headroom clean --only whatsapp-orphans --yes
+```
+
+It reads WhatsApp's database, including the write-ahead log, and removes only
+files nothing in it references. It is skipped while WhatsApp is open, refuses if
+the database cannot be read, and refuses if the database comes back empty, since
+a failed read and a genuinely empty one look identical and the wrong answer
+deletes everything.
+
+This is deliberately app-specific. There is no general way to tell which of an
+application's files it has stopped caring about, and a heuristic would
+eventually delete something real. Because it removes what you would recognise as
+your own photos and videos, it never runs as part of a plain `clean`: you have
+to name it, or list it under `enable` in the config.
+
 ## Your own cleaners
 
 `~/.config/mac-headroom/config.toml` adds cleaners with the same fields the

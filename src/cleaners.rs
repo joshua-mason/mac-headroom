@@ -42,6 +42,15 @@ pub struct Cleaner {
     pub source: Source,
     #[serde(default, skip_deserializing)]
     pub disabled: bool,
+    /// Left out of a plain `clean`. The caller has to name it with --only, or
+    /// list it under `enable` in the config. For anything that removes what a
+    /// person would recognise as their own content.
+    #[serde(default, skip_deserializing)]
+    pub opt_in: bool,
+    /// Built-in only: files are found by asking an application's own database
+    /// what it still references, rather than by matching a path.
+    #[serde(skip)]
+    pub orphans: Option<&'static crate::orphans::OrphanSpec>,
 }
 
 fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &[&str]) -> Cleaner {
@@ -56,6 +65,8 @@ fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &
         older_than_days: None,
         source: Source::Builtin,
         disabled: false,
+        opt_in: false,
+        orphans: None,
     }
 }
 
@@ -63,6 +74,20 @@ fn cmd(name: &str, summary: &str, why_safe: &str, argv: &[&str]) -> Cleaner {
     Cleaner {
         command: argv.iter().map(|s| s.to_string()).collect(),
         ..paths(name, summary, why_safe, None, &[])
+    }
+}
+
+fn orphan_cleaner(
+    name: &str,
+    summary: &str,
+    why_safe: &str,
+    skip: Option<&str>,
+    spec: &'static crate::orphans::OrphanSpec,
+) -> Cleaner {
+    Cleaner {
+        opt_in: true,
+        orphans: Some(spec),
+        ..paths(name, summary, why_safe, skip, &[])
     }
 }
 
@@ -140,6 +165,13 @@ pub fn builtins() -> Vec<Cleaner> {
             "Go's own clean. The next build recompiles.",
             &["go", "clean", "-cache"],
         ),
+        orphan_cleaner(
+            "whatsapp-orphans",
+            "WhatsApp media it no longer has any record of",
+            "Every file is checked against WhatsApp's own database, including its write-ahead log, and only files that nothing in it references are removed. Re-linking the Mac as a device replaces that database, which strands everything downloaded under the old one: the app cannot see those files, so its storage screen never frees them. Anything still on your phone or within WhatsApp's retention re-downloads when you scroll back. Skipped while WhatsApp is open, and refused outright if the database cannot be read.",
+            Some("WhatsApp"),
+            &crate::orphans::WHATSAPP,
+        ),
         cmd(
             "homebrew",
             "Homebrew downloads and old formula versions",
@@ -170,6 +202,9 @@ impl Cleaner {
             return Err(format!(
                 "{n}: why_safe is required. Say why deleting this is safe."
             ));
+        }
+        if self.orphans.is_some() {
+            return Ok(());
         }
         match (self.paths.is_empty(), self.command.is_empty()) {
             (true, true) => return Err(format!("{n}: needs either paths or command")),
@@ -336,6 +371,43 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
             return out;
         }
     }
+    if let Some(spec) = c.orphans {
+        match crate::orphans::find(spec) {
+            Err(e) => {
+                out.status = Status::Skipped;
+                out.reason = Some(e);
+                return out;
+            }
+            Ok(found) => {
+                if found.is_empty() {
+                    return out;
+                }
+                for path in found {
+                    let bytes = disk_usage(&path);
+                    let error = if apply {
+                        remove(&path).err().map(|e| e.to_string())
+                    } else {
+                        None
+                    };
+                    if error.is_none() {
+                        out.bytes += bytes;
+                    }
+                    out.targets.push(Target {
+                        path,
+                        bytes,
+                        kept: None,
+                        error,
+                    });
+                }
+                out.status = if apply {
+                    Status::Cleared
+                } else {
+                    Status::WouldClear
+                };
+                return out;
+            }
+        }
+    }
     if !c.command.is_empty() {
         let argv = &c.command;
         out.command = Some(argv.join(" "));
@@ -397,6 +469,15 @@ pub fn print_text(c: &Cleaner, o: &Outcome) {
         Status::WouldRun => println!("  would run: {}", o.command.as_deref().unwrap_or("")),
         Status::Ran => println!("  ran: {}", o.command.as_deref().unwrap_or("")),
         Status::Failed => println!("  failed: {}", o.command.as_deref().unwrap_or("")),
+        Status::WouldClear | Status::Cleared if o.targets.len() > 40 => {
+            let verb = if o.status == Status::Cleared {
+                "removed"
+            } else {
+                "would remove"
+            };
+            println!("  {verb} {} files, {}", o.targets.len(), human(o.bytes));
+            println!("  every one of them checked against the application's own records");
+        }
         Status::WouldClear | Status::Cleared => {
             for t in &o.targets {
                 match &t.kept {

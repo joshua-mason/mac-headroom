@@ -63,6 +63,15 @@ threshold, and it writes a report and notifies only when it is. Run it freely; i
 deletes nothing. `schedule status` shows whether the watch is installed and at what
 threshold.
 
+## Opt-in cleaners
+
+`whatsapp-orphans` never runs as part of `clean`, because it removes media a person
+would call their own. Suggest it only when the growth report shows WhatsApp's
+container is large and the user is surprised by that, which is the signature of the
+problem it solves. Always show the dry run first, say how many files and how much
+space, and explain that anything still on their phone re-downloads on scrollback.
+Ask them to quit WhatsApp; the cleaner refuses while it is open.
+
 ## Rules
 
 - Never pass `--yes` unless the user has explicitly said to delete, in this
