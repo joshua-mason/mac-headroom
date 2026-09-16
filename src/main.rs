@@ -3,6 +3,7 @@ mod cleaners;
 mod config;
 mod diag;
 mod growth;
+mod orphans;
 mod report;
 mod schedule;
 mod util;
@@ -170,6 +171,9 @@ fn main() {
                     }
                     if c.source == cleaners::Source::Config {
                         tags.push("from config".into());
+                    }
+                    if c.opt_in {
+                        tags.push("opt in: name it with --only".into());
                     }
                     if c.disabled {
                         tags.push("disabled in config".into());
@@ -447,7 +451,7 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
     }
     let all = load_cleaners();
     let selected: Vec<&cleaners::Cleaner> = if only.is_empty() {
-        all.iter().filter(|c| !c.disabled).collect()
+        all.iter().filter(|c| !c.disabled && !c.opt_in).collect()
     } else {
         only.iter()
             .map(|n| {
