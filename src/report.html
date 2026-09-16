@@ -63,10 +63,13 @@ svg{display:block;width:100%;height:auto}
   cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .treebar button:hover{color:var(--ink)}
 .seg{display:inline-flex;border:1px solid var(--axis);border-radius:5px;overflow:hidden;margin-bottom:14px}
-.seg button{text-decoration:none;padding:5px 14px;color:var(--ink2);border-right:1px solid var(--axis)}
+.seg button{appearance:none;-webkit-appearance:none;background:var(--surface);color:var(--ink2);
+  font:inherit;font-size:13px;line-height:1.2;text-decoration:none;cursor:pointer;
+  border:0;border-right:1px solid var(--axis);border-radius:0;padding:6px 16px;margin:0}
 .seg button:last-child{border-right:0}
+.seg button:hover:not([disabled]):not([aria-pressed="true"]){color:var(--ink)}
 .seg button[aria-pressed="true"]{background:var(--ink);color:var(--page)}
-.seg button[disabled]{opacity:.4;cursor:default}
+.seg button[disabled]{opacity:.45;cursor:default}
 .floor{color:var(--muted);font-size:13px;margin:10px 0 0}
 .node{display:grid;grid-template-columns:minmax(0,1fr) 240px 88px;gap:16px;align-items:center;
   padding:3px 0;border-radius:3px}
@@ -124,6 +127,7 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
 <div id="tip"></div>
 <div class="verdict" id="verdict"></div>
 <section id="disk"></section>
+<section id="volumes"></section>
 <section id="history"></section>
 <section id="space"></section>
 <section id="job"></section>
@@ -206,6 +210,24 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
     </div>
     <p class="cap">Every figure here comes from <span class="mono">diskutil</span>. Your data and free space are measured; system and purgeable is what is left over once those two are taken off the capacity, so it covers the sealed macOS system volume, virtual memory, Preboot and Recovery, plus anything snapshots are pinning.</p>
     ${D.snapshots.length ? `<p class="cap">${D.snapshots.length} local snapshot${D.snapshots.length > 1 ? 's' : ''}: <span class="mono">${D.snapshots.map(esc).join('<br>')}</span></p>` : ''}`;
+})();
+
+/* ---------- What else shares this disk ---------- */
+(() => {
+  const el = $('volumes'), v = D.volumes || {}, vols = v.volumes || [], imgs = v.images || [];
+  if (!vols.length && !imgs.length) { el.style.display = 'none'; return; }
+  const hidden = vols.filter(x => !x.is_data).reduce((s, x) => s + x.bytes, 0);
+  const max = Math.max(...vols.map(x => x.bytes), 1);
+  const rows = vols.map(x => `<div class="node" data-tip="${esc(`<b>${x.name}</b><br>${x.device}<br>${h(x.bytes)} used<br>${x.mount ? 'mounted at ' + x.mount : 'not mounted'}`)}">
+      <div class="nm" style="padding-left:0"><span class="lbl">${esc(x.name)}${x.is_data ? '<span class="tag">scanned</span>' : ''}</span></div>
+      <div class="track"><div class="bar" style="left:0;width:${100 * x.bytes / max}%;${x.is_data ? '' : 'opacity:.45'}"></div></div>
+      <div class="amt">${h(x.bytes)}</div></div>`).join('');
+  const imgRows = imgs.map(i => `<tr><td class="r">${h(i.backing_bytes)}</td><td class="mono">${esc(tilde(i.backing_path))}</td></tr>`).join('');
+  el.innerHTML = `<h2>What else shares this disk</h2>
+    <p class="cap" style="margin:0 0 16px">A directory scan only ever sees one filesystem. These volumes sit in the same container and draw on the same free space, which is what the ${D.disk ? h(D.disk.other) + ' of ' : ''}system and purgeable space above actually consists of. <b>${h(hidden)}</b> of it is beyond the reach of any scan.</p>
+    <div class="tree">${rows}</div>
+    ${imgs.length ? `<p class="cap" style="margin-top:20px">Disk images are mounted as volumes, but the space belongs to the file each one is read from. Those files are counted where they live, not where they appear.</p>
+    <div class="scroll" style="margin-top:12px"><table><tr><th class="r" style="width:90px">Size</th><th>File it is read from</th></tr>${imgRows}</table></div>` : ''}`;
 })();
 
 /* ---------- Space over time: the gap is the point ---------- */
@@ -387,9 +409,9 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
         <span class="mono">/private/var</span> (system logs, caches and databases, mostly unreadable without sudo),
         <span class="mono">/usr/local</span>, other user accounts, and filesystem overhead that no directory walk sees.
         Add a path to <span class="mono">scan_roots</span> in the config to break more of it down, or run
-        <span class="mono">sudo mac-headroom growth /private/var</span> for a one-off look. A scan never crosses into
-        another volume, so a mounted image such as an iOS simulator runtime is not counted here and is not costing you
-        this space either.`;
+        <span class="mono">sudo mac-headroom growth /private/var</span> for a one-off look. One place worth knowing about:
+        <span class="mono">/System/Library/AssetsV2</span> looks like part of the system but is firmlinked onto the data
+        volume, and holds downloaded OS assets such as simulator runtimes.`;
     } else {
       hint.style.display = 'none';
     }

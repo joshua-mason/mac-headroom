@@ -33,6 +33,7 @@ pub struct Data {
     #[serde(skip_serializing_if = "Option::is_none")]
     disk: Option<DiskNow>,
     snapshots: Vec<String>,
+    volumes: crate::volumes::Volumes,
     update_snapshot_pinned: bool,
     history: Vec<Reading>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,6 +128,7 @@ pub fn gather() -> Data {
             other: d.total.saturating_sub(d.used + d.free),
         }),
         snapshots,
+        volumes: crate::volumes::gather(),
         update_snapshot_pinned,
         history: history(),
         // More entries than the terminal shows: the page nests them into a

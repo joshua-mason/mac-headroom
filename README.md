@@ -25,6 +25,7 @@ mac-headroom schedule install --weekday mon --hour 10 --only chrome-cache --only
 mac-headroom schedule status   # installed? loaded? when? last run?
 mac-headroom schedule run      # do the weekly routine now
 mac-headroom schedule uninstall
+mac-headroom volumes           # what else shares this disk, and what a scan cannot reach
 mac-headroom check             # is free space low? notify and write a report if so
 ```
 
@@ -112,6 +113,20 @@ the last growth diff as bars, the weekly job, every cleaner with its reason,
 and the deletion audit. It is read-only and built from saved state, so it
 never scans or deletes. Use `--no-open` to just write the file, `--out` to
 choose where.
+
+## What a scan cannot see
+
+A directory walk only ever covers one filesystem, so on a Mac it misses a
+surprising amount: the sealed system volume, swap, Preboot and Recovery all
+share the same APFS container and draw on the same free space. `volumes` names
+them with what each has consumed, which is what the "system and purgeable"
+figure is actually made of.
+
+It also lists attached disk images with the file each is read from, since a
+mounted image looks like a volume but the space belongs to that file. An iOS
+simulator runtime, for instance, mounts as an 18GB volume while costing a 7.8GB
+file, and that file lives under `/System/Library/AssetsV2`, which looks like
+part of the system but is firmlinked onto the data volume.
 
 ## Noticing before it is too late
 

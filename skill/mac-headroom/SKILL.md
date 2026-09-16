@@ -46,6 +46,15 @@ for scratch that is safe once a job has finished. Then run `mac-headroom config 
 and a dry run of `clean --only <name>`, and show the user what would be deleted and
 what was kept before suggesting `--yes`.
 
+## When the numbers do not add up
+
+`mac-headroom --json volumes` explains the difference between what a scan finds and
+what the disk reports. It lists the volumes sharing the APFS container, only one of
+which any scan can reach, and the backing file behind each mounted disk image. Reach
+for it when a user asks where space went and the growth report does not account for
+it. Do not suggest deleting anything it lists without checking what it is: swap,
+Preboot and Recovery are managed by macOS.
+
 ## Alerts
 
 `mac-headroom --json check` is the cheap low-space test the hourly watch job runs:

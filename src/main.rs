@@ -6,6 +6,7 @@ mod growth;
 mod report;
 mod schedule;
 mod util;
+mod volumes;
 
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -68,6 +69,8 @@ enum Cmd {
     },
     /// One-screen overview: disk, config, weekly job, recorded history
     Status,
+    /// What else shares this disk: other volumes in the container, and mounted images
+    Volumes,
     /// Look at free space and notify if it is low. Cheap enough to run hourly.
     Check {
         /// Notify even if one went out recently
@@ -280,6 +283,14 @@ fn main() {
                 emit(&s)
             } else {
                 print_overview(&s)
+            }
+        }
+        Cmd::Volumes => {
+            let v = volumes::gather();
+            if cli.json {
+                emit(&v)
+            } else {
+                volumes::print_text(&v)
             }
         }
         Cmd::Check { force } => {
