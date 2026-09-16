@@ -36,18 +36,31 @@ pub struct Config {
 }
 
 /// Missing file is an empty config. A file that exists but does not parse is an error.
+///
+/// An absent file is parsed as an empty document rather than built with
+/// `Config::default()`, because a derived Default ignores every
+/// `#[serde(default = ...)]` and would quietly zero the alert threshold.
 pub fn load() -> Result<Config, String> {
     let p = path();
     if !p.exists() {
-        return Ok(Config::default());
+        return toml::from_str("").map_err(|e| e.to_string());
     }
     let text = fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
     toml::from_str(&text).map_err(|e| format!("{}:\n{e}", p.display()))
 }
 
-pub fn validate(cfg: &Config) -> Vec<String> {
+/// What a config says about itself. `problems` stop the tool; `notes` are
+/// worth mentioning but are not errors.
+#[derive(Default)]
+pub struct Findings {
+    pub problems: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+pub fn validate(cfg: &Config) -> Findings {
     let builtin = builtins();
     let mut problems = Vec::new();
+    let mut notes = Vec::new();
     for d in &cfg.disable {
         if !builtin.iter().any(|b| &b.name == d) {
             problems.push(format!(
@@ -63,7 +76,9 @@ pub fn validate(cfg: &Config) -> Vec<String> {
         if !p.is_absolute() {
             problems.push(format!("scan_roots: {r:?} must be an absolute path"));
         } else if !p.is_dir() {
-            problems.push(format!("scan_roots: {r:?} is not a directory"));
+            notes.push(format!(
+                "scan_roots: {r:?} is not on this machine, so it is skipped"
+            ));
         }
     }
     let mut seen = std::collections::BTreeSet::new();
@@ -78,7 +93,7 @@ pub fn validate(cfg: &Config) -> Vec<String> {
             problems.push(format!("{}: defined twice", c.name));
         }
     }
-    problems
+    Findings { problems, notes }
 }
 
 /// Built-ins (flagged if disabled) followed by the user's cleaners.
@@ -101,24 +116,33 @@ pub fn merge(cfg: &Config) -> Vec<Cleaner> {
 /// because a half-understood config is exactly how the wrong thing gets deleted.
 /// The low-space threshold, as a share of the whole disk.
 pub fn alert_below_percent() -> f64 {
-    load().map(|c| c.alert_below_percent).unwrap_or(5.0)
+    load()
+        .map(|c| c.alert_below_percent)
+        .unwrap_or_else(|_| default_alert())
 }
 
-/// Extra roots the space breakdown should cover, from the config.
+/// Extra roots the space breakdown should cover. Anything not on this machine
+/// is dropped here rather than failing a scan later.
 pub fn scan_roots() -> Vec<PathBuf> {
     load()
-        .map(|c| c.scan_roots.iter().map(PathBuf::from).collect())
+        .map(|c| {
+            c.scan_roots
+                .iter()
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 pub fn all_cleaners() -> Result<Vec<Cleaner>, String> {
     let cfg = load()?;
-    let problems = validate(&cfg);
-    if !problems.is_empty() {
+    let found = validate(&cfg);
+    if !found.problems.is_empty() {
         return Err(format!(
             "{} has problems:\n  {}",
             path().display(),
-            problems.join("\n  ")
+            found.problems.join("\n  ")
         ));
     }
     Ok(merge(&cfg))
@@ -203,6 +227,7 @@ pub struct Check {
     pub path: PathBuf,
     pub exists: bool,
     pub problems: Vec<String>,
+    pub notes: Vec<String>,
     pub disabled: Vec<String>,
     pub user_cleaners: Vec<String>,
     pub scan_roots: Vec<String>,
@@ -216,7 +241,8 @@ pub fn check() -> Check {
         Ok(cfg) => Check {
             path: p,
             exists,
-            problems: validate(&cfg),
+            problems: validate(&cfg).problems,
+            notes: validate(&cfg).notes,
             disabled: cfg.disable.clone(),
             user_cleaners: cfg.cleaners.iter().map(|c| c.name.clone()).collect(),
             scan_roots: cfg.scan_roots.clone(),
@@ -226,6 +252,7 @@ pub fn check() -> Check {
             path: p,
             exists,
             problems: vec![e],
+            notes: vec![],
             disabled: vec![],
             user_cleaners: vec![],
             scan_roots: vec![],
@@ -261,6 +288,9 @@ pub fn print_check(c: &Check) {
             "off".into()
         }
     );
+    for n in &c.notes {
+        println!("  note     {n}");
+    }
     if c.problems.is_empty() {
         println!("  OK");
     } else {
@@ -280,7 +310,22 @@ mod tests {
         assert!(cfg.cleaners.is_empty());
         assert_eq!(cfg.scan_roots.len(), 3);
         assert_eq!(cfg.alert_below_percent, 5.0);
-        assert!(validate(&cfg).iter().all(|p| p.starts_with("scan_roots")));
+        assert!(validate(&cfg).problems.is_empty());
+
+        // An absent config must still carry the defaults; a derived Default
+        // would silently switch alerting off.
+        let empty: Config = toml::from_str("").unwrap();
+        assert_eq!(empty.alert_below_percent, 5.0);
+        assert!(empty.scan_roots.is_empty());
+    }
+
+    #[test]
+    fn missing_scan_root_is_a_note_not_a_problem() {
+        let cfg: Config =
+            toml::from_str(r#"scan_roots = ["/definitely/not/here", "relative/path"]"#).unwrap();
+        let f = validate(&cfg);
+        assert_eq!(f.notes.len(), 1, "{:?}", f.notes);
+        assert_eq!(f.problems.len(), 1, "{:?}", f.problems);
     }
 
     #[test]
@@ -312,7 +357,11 @@ mod tests {
         }
         let cfg: Config = toml::from_str(&blocks).unwrap_or_else(|e| panic!("{e}\n{blocks}"));
         assert_eq!(cfg.cleaners.len(), 4);
-        assert!(validate(&cfg).is_empty(), "{:?}", validate(&cfg));
+        assert!(
+            validate(&cfg).problems.is_empty(),
+            "{:?}",
+            validate(&cfg).problems
+        );
     }
 
     #[test]
@@ -335,7 +384,7 @@ paths = ["~/a/b"]
 "#,
         )
         .unwrap();
-        let problems = validate(&cfg);
+        let problems = validate(&cfg).problems;
         assert_eq!(problems.len(), 3, "{problems:?}");
     }
 }

@@ -500,6 +500,11 @@ fn audit(r: &CleanReport) {
     let ts = now();
     for o in &r.cleaners {
         for t in &o.targets {
+            // A target a filter kept was never touched. Recording it as a
+            // deletion makes the one record meant to be trustworthy a lie.
+            if t.kept.is_some() {
+                continue;
+            }
             let result = t.error.as_deref().unwrap_or("deleted");
             let _ = writeln!(
                 f,

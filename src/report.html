@@ -340,10 +340,10 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       subtree(g, 1, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
       extra.forEach(r => subtree(r, 1, tilde(r.root), 'An extra scan root from your config.', true));
       if (reconcile) {
-        rows.push({ label: 'not scanned', v: d.used - covered, depth: 1, rest: true,
+        rows.push({ label: 'not scanned', v: d.used - covered, depth: 1, rest: true, unscanned: true,
           tipText: extra.length
-            ? 'The rest of the data volume, outside every root that is scanned. Add more paths to scan_roots in the config to break it down.'
-            : 'Everything outside your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like. Add them to scan_roots in the config to break this down.' });
+            ? 'The rest of the data volume, outside every root that is scanned.'
+            : 'Everything outside your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like.' });
       }
     }
     return rows;
@@ -379,6 +379,20 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       : `Indented rows sit <em>inside</em> the row above, so a parent and its child are never two separate claims on the same space.${extra.length ? '' : ' Only <span class="mono">~</span> is scanned; add paths to <span class="mono">scan_roots</span> in the config to cover the rest of the volume.'}`;
     $('key').style.display = change ? '' : 'none';
 
+    const un = rows.find(r => r.unscanned);
+    const hint = $('unscanned');
+    if (un && un.v > 2 * GB) {
+      hint.style.display = '';
+      hint.innerHTML = `<b>${h(un.v)} is outside every scanned root.</b> On most Macs the bulk of it is
+        <span class="mono">/private/var</span> (system logs, caches and databases, mostly unreadable without sudo),
+        <span class="mono">/usr/local</span>, other user accounts, and filesystem overhead that no directory walk sees.
+        Add a path to <span class="mono">scan_roots</span> in the config to break more of it down, or run
+        <span class="mono">sudo mac-headroom growth /private/var</span> for a one-off look. A scan never crosses into
+        another volume, so a mounted image such as an iOS simulator runtime is not counted here and is not costing you
+        this space either.`;
+    } else {
+      hint.style.display = 'none';
+    }
     if (!rows.length) { $('treecount').textContent = ''; return; }
     const els = [...$('tree').querySelectorAll('.node')];
     /* Open the home folder to one level; the system roots stay folded so the
@@ -418,6 +432,7 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
     <div class="keys" id="key" style="margin-bottom:12px;display:none"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>
     <div class="treebar"><span class="muted" id="treecount"></span><span><button id="expand">expand all</button> · <button id="collapse">collapse all</button></span></div>
     <div class="tree" id="tree"></div>
+    <p class="floor" id="unscanned" style="display:none"></p>
     ${skipped ? `<p class="floor">${skipped.toLocaleString()} entries could not be read, almost always inside a system directory, so those totals are a floor rather than the whole figure. Running a scan with sudo would close the gap.</p>` : ''}`;
   const set = m => { mode = m; $('mSize').setAttribute('aria-pressed', m === 'size'); $('mChange').setAttribute('aria-pressed', m === 'change'); draw(); };
   $('mSize').onclick = () => set('size');
@@ -461,8 +476,10 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <td>${what(k)}</td>
       <td class="r muted">${k.source === 'config' ? 'yours' : 'built in'}</td>
     </tr>`;
-  const problems = c.problems.length
-    ? `<p class="cap" style="color:var(--warn)">${c.problems.map(esc).join('<br>')}</p>` : '';
+  const problems = (c.problems.length
+    ? `<p class="cap" style="color:var(--warn)">${c.problems.map(esc).join('<br>')}</p>` : '')
+    + ((c.notes || []).length
+    ? `<p class="cap muted">${c.notes.map(esc).join('<br>')}</p>` : '');
   el.innerHTML = `<h2>Cleaners</h2>
     <p class="cap" style="margin:0 0 18px">${on.length} enabled${off.length ? `, ${off.length} turned off` : ''}. ${c.exists
       ? `Yours are defined in <span class="mono">${esc(tilde(c.path))}</span>.`

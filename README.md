@@ -36,7 +36,9 @@ mac-headroom check             # is free space low? notify and write a report if
 - Cleaners that touch a running app's cache are skipped while that app is open.
 - Sizes are physical blocks, not logical length, so sparse files and clones are not overcounted.
 - Chrome's profile data (Application Support) is never touched. Only its cache is.
-- Every real deletion is appended to `~/.local/state/mac-headroom/audit.log`.
+- Every real deletion, and only a real deletion, is appended to
+  `~/.local/state/mac-headroom/audit.log`. A target a filter kept is not
+  recorded, because an audit trail that overstates is worse than none.
 
 ## Diagnose before you delete
 
