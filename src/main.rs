@@ -1,3 +1,4 @@
+mod alert;
 mod cleaners;
 mod config;
 mod diag;
@@ -67,6 +68,12 @@ enum Cmd {
     },
     /// One-screen overview: disk, config, weekly job, recorded history
     Status,
+    /// Look at free space and notify if it is low. Cheap enough to run hourly.
+    Check {
+        /// Notify even if one went out recently
+        #[arg(long)]
+        force: bool,
+    },
     /// Write a self-contained HTML report of the same information and open it
     Report {
         /// Where to write it (default: the state directory)
@@ -107,6 +114,12 @@ enum ScheduleCmd {
         /// Skip the weekly home growth scan (about a minute)
         #[arg(long)]
         no_growth: bool,
+        /// Do not install the hourly low space watch
+        #[arg(long)]
+        no_watch: bool,
+        /// How often the watch looks at free space
+        #[arg(long, default_value_t = 60, value_name = "MINUTES")]
+        watch_minutes: u64,
     },
     /// Remove the weekly job
     Uninstall,
@@ -211,8 +224,12 @@ fn main() {
                 minute,
                 only,
                 no_growth,
+                no_watch,
+                watch_minutes,
             } => {
-                if let Err(e) = schedule::install(&weekday, hour, minute, &only, !no_growth) {
+                let watch = (!no_watch).then_some(watch_minutes.max(5));
+                if let Err(e) = schedule::install(&weekday, hour, minute, &only, !no_growth, watch)
+                {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
@@ -263,6 +280,17 @@ fn main() {
                 emit(&s)
             } else {
                 print_overview(&s)
+            }
+        }
+        Cmd::Check { force } => {
+            let Some(c) = alert::check(force) else {
+                eprintln!("could not read diskutil info for /System/Volumes/Data");
+                std::process::exit(1);
+            };
+            if cli.json {
+                emit(&c)
+            } else {
+                alert::print_text(&c)
             }
         }
         Cmd::Report { out, no_open } => {

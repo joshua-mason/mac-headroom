@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+fn default_alert() -> f64 {
+    5.0
+}
+
 pub fn path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
@@ -24,6 +28,9 @@ pub struct Config {
     /// what it cannot read, and the report says so.
     #[serde(default)]
     pub scan_roots: Vec<String>,
+    /// Notify when free space falls below this share of the disk. 0 turns it off.
+    #[serde(default = "default_alert")]
+    pub alert_below_percent: f64,
     #[serde(default, rename = "cleaner")]
     pub cleaners: Vec<Cleaner>,
 }
@@ -47,6 +54,9 @@ pub fn validate(cfg: &Config) -> Vec<String> {
                 "disable: {d:?} is not a built-in cleaner (see `mac-headroom list`)"
             ));
         }
+    }
+    if !(0.0..=90.0).contains(&cfg.alert_below_percent) {
+        problems.push("alert_below_percent must be between 0 and 90".into());
     }
     for r in &cfg.scan_roots {
         let p = std::path::Path::new(r);
@@ -89,6 +99,11 @@ pub fn merge(cfg: &Config) -> Vec<Cleaner> {
 
 /// The cleaner set every command works from. Refuses to proceed on a bad config,
 /// because a half-understood config is exactly how the wrong thing gets deleted.
+/// The low-space threshold, as a share of the whole disk.
+pub fn alert_below_percent() -> f64 {
+    load().map(|c| c.alert_below_percent).unwrap_or(5.0)
+}
+
 /// Extra roots the space breakdown should cover, from the config.
 pub fn scan_roots() -> Vec<PathBuf> {
     load()
@@ -125,6 +140,10 @@ disable = []
 # about two thirds of the data volume. Scanning these without sudo skips what it
 # cannot read (/private/var especially), and the report marks the figure as a floor.
 scan_roots = ["/Applications", "/Library", "/opt"]
+
+# Notify when free space drops below this share of the disk, checked hourly by
+# the watch job that `schedule install` sets up. 0 turns notifications off.
+alert_below_percent = 5
 
 # ---- Examples. Remove the leading # to enable one. ----
 
@@ -187,6 +206,7 @@ pub struct Check {
     pub disabled: Vec<String>,
     pub user_cleaners: Vec<String>,
     pub scan_roots: Vec<String>,
+    pub alert_below_percent: f64,
 }
 
 pub fn check() -> Check {
@@ -200,6 +220,7 @@ pub fn check() -> Check {
             disabled: cfg.disable.clone(),
             user_cleaners: cfg.cleaners.iter().map(|c| c.name.clone()).collect(),
             scan_roots: cfg.scan_roots.clone(),
+            alert_below_percent: cfg.alert_below_percent,
         },
         Err(e) => Check {
             path: p,
@@ -208,6 +229,7 @@ pub fn check() -> Check {
             disabled: vec![],
             user_cleaners: vec![],
             scan_roots: vec![],
+            alert_below_percent: 0.0,
         },
     }
 }
@@ -231,6 +253,14 @@ pub fn print_check(c: &Check) {
     if !c.scan_roots.is_empty() {
         println!("  extra scan roots    {}", c.scan_roots.join(", "));
     }
+    println!(
+        "  low space alert     {}",
+        if c.alert_below_percent > 0.0 {
+            format!("under {:.0}% free", c.alert_below_percent)
+        } else {
+            "off".into()
+        }
+    );
     if c.problems.is_empty() {
         println!("  OK");
     } else {
@@ -249,6 +279,7 @@ mod tests {
         let cfg: Config = toml::from_str(EXAMPLE).unwrap();
         assert!(cfg.cleaners.is_empty());
         assert_eq!(cfg.scan_roots.len(), 3);
+        assert_eq!(cfg.alert_below_percent, 5.0);
         assert!(validate(&cfg).iter().all(|p| p.starts_with("scan_roots")));
     }
 

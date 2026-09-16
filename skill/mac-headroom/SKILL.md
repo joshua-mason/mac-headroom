@@ -46,6 +46,14 @@ for scratch that is safe once a job has finished. Then run `mac-headroom config 
 and a dry run of `clean --only <name>`, and show the user what would be deleted and
 what was kept before suggesting `--yes`.
 
+## Alerts
+
+`mac-headroom --json check` is the cheap low-space test the hourly watch job runs:
+one `diskutil` call, no scan. `low` says whether free space is under the user's
+threshold, and it writes a report and notifies only when it is. Run it freely; it
+deletes nothing. `schedule status` shows whether the watch is installed and at what
+threshold.
+
 ## Rules
 
 - Never pass `--yes` unless the user has explicitly said to delete, in this

@@ -10,11 +10,48 @@ use std::path::PathBuf;
 use std::process::Command;
 
 pub const LABEL: &str = "com.mac-headroom.schedule";
+/// The hourly low-space check. Separate from the weekly job because launchd
+/// runs one program per job, and because losing one should not lose the other.
+pub const WATCH_LABEL: &str = "com.mac-headroom.watch";
 
 pub fn plist_path() -> PathBuf {
     home()
         .join("Library/LaunchAgents")
         .join(format!("{LABEL}.plist"))
+}
+
+pub fn watch_plist_path() -> PathBuf {
+    home()
+        .join("Library/LaunchAgents")
+        .join(format!("{WATCH_LABEL}.plist"))
+}
+
+fn watch_plist(exe: &str, every_minutes: u64) -> String {
+    let log = log_path().display().to_string();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{WATCH_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{}</string>
+    <string>check</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>{}</integer>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+"#,
+        xml_escape(exe),
+        every_minutes * 60
+    )
 }
 
 pub fn log_path() -> PathBuf {
@@ -158,12 +195,35 @@ fn is_loaded() -> bool {
     launchctl(&["print", &domain_target()])
 }
 
+fn watch_target() -> String {
+    format!("gui/{}/{WATCH_LABEL}", uid())
+}
+
+fn watch_loaded() -> bool {
+    launchctl(&["print", &watch_target()])
+}
+
+fn install_watch(exe: &str, every_minutes: u64) -> Result<(), String> {
+    let path = watch_plist_path();
+    if watch_loaded() {
+        launchctl(&["bootout", &watch_target()]);
+    }
+    fs::write(&path, watch_plist(exe, every_minutes)).map_err(|e| e.to_string())?;
+    let domain = format!("gui/{}", uid());
+    if !launchctl(&["bootstrap", &domain, &path.to_string_lossy()]) {
+        return Err(format!("launchctl bootstrap failed for {}", path.display()));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn install(
     weekday: &str,
     hour: u8,
     minute: u8,
     only: &[String],
     growth: bool,
+    watch_minutes: Option<u64>,
 ) -> Result<(), String> {
     let wd = weekday_number(weekday).ok_or_else(|| format!("unknown weekday: {weekday}"))?;
     if hour > 23 || minute > 59 {
@@ -206,6 +266,22 @@ pub fn install(
     println!("  binary  {}", exe.display());
     println!("  plist   {}", path.display());
     println!("  log     {}", log_path().display());
+    match watch_minutes {
+        Some(m) => {
+            install_watch(&exe.to_string_lossy(), m)?;
+            println!(
+                "  watches every {m} min, notifying below {:.0}% free",
+                crate::config::alert_below_percent()
+            );
+        }
+        None => {
+            if watch_loaded() {
+                launchctl(&["bootout", &watch_target()]);
+            }
+            let _ = fs::remove_file(watch_plist_path());
+            println!("  no low space watch (--no-watch)");
+        }
+    }
     let what = if only.is_empty() {
         "all cleaners".to_string()
     } else {
@@ -238,7 +314,15 @@ pub fn uninstall() -> Result<(), String> {
     if existed {
         fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
-    if !was_loaded && !existed {
+    let watch_existed = watch_plist_path().exists() || watch_loaded();
+    if watch_loaded() {
+        launchctl(&["bootout", &watch_target()]);
+    }
+    let _ = fs::remove_file(watch_plist_path());
+    if watch_existed {
+        println!("Removed {WATCH_LABEL}");
+    }
+    if !was_loaded && !existed && !watch_existed {
         println!("Nothing installed.");
     } else {
         println!(
@@ -263,6 +347,11 @@ pub struct Status {
     pub cleaners: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run: Option<String>,
+    pub watch_installed: bool,
+    pub watch_loaded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_every_minutes: Option<u64>,
+    pub alert_below_percent: f64,
 }
 
 fn plist_strings(xml: &str, after_key: &str) -> Vec<String> {
@@ -278,6 +367,14 @@ fn plist_strings(xml: &str, after_key: &str) -> Vec<String> {
         .skip(1)
         .filter_map(|s| s.split("</string>").next().map(xml_unescape))
         .collect()
+}
+
+fn plist_int_u64(xml: &str, key: &str) -> Option<u64> {
+    let start = xml.find(&format!("<key>{key}</key>"))?;
+    let rest = &xml[start..];
+    let s = rest.find("<integer>")? + "<integer>".len();
+    let e = rest[s..].find("</integer>")? + s;
+    rest[s..e].parse().ok()
 }
 
 fn plist_int(xml: &str, key: &str) -> Option<u8> {
@@ -326,6 +423,13 @@ pub fn status() -> Status {
         schedule,
         cleaners,
         last_run,
+        watch_installed: watch_plist_path().exists(),
+        watch_loaded: watch_loaded(),
+        watch_every_minutes: fs::read_to_string(watch_plist_path())
+            .ok()
+            .and_then(|x| plist_int_u64(&x, "StartInterval"))
+            .map(|s| s / 60),
+        alert_below_percent: crate::config::alert_below_percent(),
     }
 }
 
@@ -363,6 +467,14 @@ pub fn print_status(s: &Status) {
     match &s.last_run {
         Some(l) => println!("  last run {l}"),
         None => println!("  last run never"),
+    }
+    match (s.watch_installed, s.watch_every_minutes) {
+        (true, Some(m)) => println!(
+            "  watch    every {m} min, notifies below {:.0}% free{}",
+            s.alert_below_percent,
+            if s.watch_loaded { "" } else { "  (NOT loaded)" }
+        ),
+        _ => println!("  watch    not installed"),
     }
 }
 
@@ -425,6 +537,12 @@ pub fn run(only: &[String], growth: bool) {
     let report = crate::run_clean(false, true, only);
     let free_after = crate::diag::disk().map(|d| d.free);
     record_run(free_before, free_after);
+    // Leave a current report behind, so the weekly picture is ready to open.
+    let report_path = crate::report::default_path();
+    match crate::report::write(&crate::report::gather(), &report_path) {
+        Ok(()) => println!("\nreport: {}", report_path.display()),
+        Err(e) => println!("\ncould not write report: {e}"),
+    }
     println!();
     match (free_before, free_after) {
         (Some(b), Some(a)) => println!(

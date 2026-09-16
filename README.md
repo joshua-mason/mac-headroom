@@ -25,6 +25,7 @@ mac-headroom schedule install --weekday mon --hour 10 --only chrome-cache --only
 mac-headroom schedule status   # installed? loaded? when? last run?
 mac-headroom schedule run      # do the weekly routine now
 mac-headroom schedule uninstall
+mac-headroom check             # is free space low? notify and write a report if so
 ```
 
 ## Principles
@@ -109,6 +110,23 @@ the last growth diff as bars, the weekly job, every cleaner with its reason,
 and the deletion audit. It is read-only and built from saved state, so it
 never scans or deletes. Use `--no-open` to just write the file, `--out` to
 choose where.
+
+## Noticing before it is too late
+
+`schedule install` also sets up an hourly watch. It is one `diskutil` call and
+no directory walk, so it costs nothing to run often. When free space falls
+below `alert_below_percent` of the disk (5 by default, 0 turns it off) it
+writes a fresh report and posts a notification naming it, then stays quiet for
+twelve hours so one full disk is one notification rather than one an hour.
+
+```
+mac-headroom check           # run that same test now
+mac-headroom check --force   # ignore the cooldown
+mac-headroom schedule install --no-watch
+```
+
+The weekly job also leaves a current report behind when it finishes, so there
+is always one to open.
 
 ## With an AI agent
 
