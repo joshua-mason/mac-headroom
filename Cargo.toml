@@ -2,12 +2,12 @@
 name = "mac-headroom"
 version = "0.1.0"
 edition = "2021"
-description = "Disk pressure diagnostician and cache cleaner for macOS developers"
+description = "Find where macOS disk space went, and clear caches safely. Every command answers in JSON, states why each thing is safe to delete, and is a dry run unless told otherwise, so an AI agent can diagnose a full disk and explain it before anything is removed."
 license = "MIT"
 repository = "https://github.com/joshua-mason/mac-headroom"
 homepage = "https://github.com/joshua-mason/mac-headroom"
 readme = "README.md"
-keywords = ["disk", "storage", "macos", "cleanup", "cli"]
+keywords = ["disk-usage", "macos", "cleanup", "json", "ai-agent"]
 categories = ["command-line-utilities", "filesystem"]
 exclude = ["/.github", "/out", "/skill"]
 

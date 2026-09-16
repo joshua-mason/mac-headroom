@@ -149,8 +149,19 @@ is always one to open.
 
 ## With an AI agent
 
-mac-headroom is designed to be run by a coding agent and interpreted by it. The
-`--json` flag gives structured output for every subcommand. `skill/mac-headroom/SKILL.md`
+mac-headroom is built to be run by a coding agent and interpreted by it. A
+full disk is a diagnosis problem, and the reasoning is the part an agent is
+good at; what it lacks is trustworthy numbers and a tool that refuses to do
+anything reckless. So the split is deliberate: this measures and explains,
+the agent decides.
+
+- `--json` on every subcommand, with stable cleaner names to refer to.
+- Every cleaner carries a `why_safe` line the agent can quote back to you.
+- Read-only by default. `--yes` is the only way anything is deleted, and
+  `HEADROOM_NO_DELETE=1` disables even that, so the tool can be handed to an
+  agent knowing the worst case is a report.
+- Physical block sizes, snapshot detection and scan history are things an
+  agent cannot work out for itself between sessions. `skill/mac-headroom/SKILL.md`
 is a drop-in skill for Claude Code (copy it to `~/.claude/skills/mac-headroom/`) that
 tells the agent the order of operations and the deletion rules.
 
