@@ -1,4 +1,4 @@
-use crate::util::{ago, disk_usage, expand, human, is_running, now, on_path, tilde};
+use crate::util::{ago, disk_usage, expand, home, human, is_running, now, on_path, tilde};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -506,6 +506,7 @@ fn measure_dir(argv: &[String]) -> Option<PathBuf> {
     }
     let out = Command::new(bin)
         .args(args)
+        .current_dir(home())
         .stderr(Stdio::null())
         .output()
         .ok()?;
@@ -631,17 +632,22 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
             out.cache_bytes = before;
             return out;
         }
+        // Run from the home folder. An app opened from Finder starts in `/`, and
+        // pnpm, for one, exits with status 226 and no message when run there.
         match Command::new(&argv[0])
             .args(&argv[1..])
-            .stdout(Stdio::null())
+            .current_dir(home())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
         {
             Ok(o) if o.status.success() => out.status = Status::Ran,
             Ok(o) => {
                 out.status = Status::Failed;
+                // Some tools report their error on stdout, so look there too.
                 out.reason = Some(
                     failure_line(&String::from_utf8_lossy(&o.stderr))
+                        .or_else(|| failure_line(&String::from_utf8_lossy(&o.stdout)))
                         .unwrap_or_else(|| format!("exited with {}", o.status)),
                 );
             }

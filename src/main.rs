@@ -539,6 +539,17 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
     if apply {
         report.free_after = diag::disk().map(|d| d.free);
         audit(&report);
+        // Anything showing what can be freed reads the saved findings. Left
+        // alone, they go on listing what was just removed, which makes a clear
+        // that worked look like one that did not.
+        if let Some(mut saved) = findings::load() {
+            saved.reclaimable = all
+                .iter()
+                .filter(|c| !c.disabled && !c.opt_in)
+                .map(cleaners::estimate)
+                .collect();
+            findings::save(&saved);
+        }
     }
 
     if !json {

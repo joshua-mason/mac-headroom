@@ -25,14 +25,12 @@ public struct MenuView: View {
     private var theme: Theme {
         injected.name != Theme.system.name ? injected : (Theme.named(chosen) ?? .clean)
     }
-    @State private var confirming: Bool
     /// Showing the explanation of Full Disk Access instead of starting a scan.
     @State private var askingAccess = false
     /// The person chose to scan without access; do not ask them every time.
     @AppStorage("scanWithoutAccess") private var scanWithoutAccess = false
 
-    public init(startConfirming: Bool = false, startAskingAccess: Bool = false) {
-        _confirming = State(initialValue: startConfirming)
+    public init(startAskingAccess: Bool = false) {
         _askingAccess = State(initialValue: startAskingAccess)
     }
 
@@ -61,6 +59,7 @@ public struct MenuView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .foregroundStyle(theme.text)
         .background(theme.background.ignoresSafeArea())
+        .background(MenuWindowAnchor())
         .onAppear { Task { await store.refresh() } }
         .task(id: askingAccess) { await waitForAccess() }
         .environment(\.theme, theme)
@@ -109,19 +108,6 @@ public struct MenuView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Scanning your disk").font(.system(size: 13, weight: .semibold))
                         Text("This takes a minute or two.").font(.system(size: 11)).foregroundStyle(theme.secondary)
-                    }
-                }
-            }
-        } else if let done = store.cleaned {
-            card {
-                HStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(theme.good)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Freed \(formatBytes(done.bytes))").font(.system(size: 13, weight: .semibold))
-                        Text(done.freeAfter.map { "\(formatBytes($0)) free now" } ?? "Done")
-                            .font(.system(size: 11)).foregroundStyle(theme.secondary)
                     }
                 }
             }
@@ -181,32 +167,27 @@ public struct MenuView: View {
                     ProgressView().controlSize(.small)
                     Text("Clearing…").font(.system(size: 13)).foregroundStyle(theme.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 32)
-            } else if confirming {
-                Text("Apps and tools recreate these when they need them. Nothing personal is removed.")
+                .frame(maxWidth: .infinity, minHeight: 34)
+            } else {
+                Button(store.clearableNow > 0 ? "Clear \(formatBytes(store.clearableNow))" : "Nothing to clear") {
+                    Task { await store.clean() }
+                }
+                .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
+                .disabled(store.clearableNow == 0 || store.scanning)
+            }
+            if let done = store.cleaned, !store.cleaning {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.good)
+                    Text(done.bytes > 0 ? "Freed \(formatBytes(done.bytes))" : "Already clear, nothing more to free")
+                        .foregroundStyle(theme.secondary)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .frame(maxWidth: .infinity)
+            } else if !blocked.names.isEmpty {
+                Text("Quit \(blocked.names.joined(separator: " and ")) to clear another \(formatBytes(blocked.bytes)).")
                     .font(.system(size: 11)).foregroundStyle(theme.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button("Cancel") { confirming = false }
-                        .buttonStyle(PillButtonStyle(prominent: false, theme: theme))
-                    Button("Clear \(formatBytes(store.clearableNow))") {
-                        confirming = false
-                        Task { await store.clean() }
-                    }
-                    .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
-                    .keyboardShortcut(.defaultAction)
-                }
-            } else {
-                Button("Clear \(formatBytes(store.clearableNow))") { confirming = true }
-                    .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
-                    .disabled(store.clearableNow == 0 || store.scanning)
-                if !blocked.names.isEmpty {
-                    Text("Quit \(blocked.names.joined(separator: " and ")) to clear another \(formatBytes(blocked.bytes)).")
-                        .font(.system(size: 11)).foregroundStyle(theme.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
     }
@@ -300,6 +281,7 @@ public struct MenuView: View {
             FooterButton(title: "Scan", systemImage: "arrow.clockwise") { startScan() }
                 .disabled(store.scanning || store.cleaning)
             FooterButton(title: "Full report", systemImage: "doc.text.magnifyingglass") {
+                MenuWindowAnchor.close()
                 openWindow(id: "report")
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -495,3 +477,53 @@ func relativeTime(_ epoch: UInt64) -> String {
     formatter.unitsStyle = .full
     return formatter.localizedString(for: Date(timeIntervalSince1970: TimeInterval(epoch)), relativeTo: Date())
 }
+
+// MARK: - Keeping the menu attached to the menu bar
+
+/// macOS resizes a window by keeping its bottom edge still. For a menu that
+/// hangs from the menu bar that is backwards: whenever the content got shorter,
+/// after clearing or while scanning, the whole menu dropped away from the menu
+/// bar and left a gap above it. This notes where the top was when the menu
+/// opened and puts it back after every resize.
+struct MenuWindowAnchor: NSViewRepresentable {
+    private static weak var current: NSWindow?
+
+    /// Close the menu, for when an action opens a separate window.
+    static func close() { current?.orderOut(nil) }
+
+    func makeNSView(context: Context) -> NSView { AnchorView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class AnchorView: NSView {
+        private var top: CGFloat?
+        private var tokens: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            tokens.forEach { NotificationCenter.default.removeObserver($0) }
+            tokens = []
+            guard let window else { return }
+            MenuWindowAnchor.current = window
+            top = window.frame.maxY
+            let center = NotificationCenter.default
+            // Opening places the menu correctly, so that is the top to keep.
+            tokens.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                self?.top = self?.window?.frame.maxY
+            })
+            tokens.append(center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+                self?.restoreTop()
+            })
+        }
+
+        private func restoreTop() {
+            guard let window, let top else { return }
+            let frame = window.frame
+            if abs(frame.maxY - top) > 0.5 {
+                window.setFrameOrigin(NSPoint(x: frame.minX, y: top - frame.height))
+            }
+        }
+
+        deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+    }
+}
+

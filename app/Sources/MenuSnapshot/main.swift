@@ -3,13 +3,12 @@ import MacHeadroomUI
 import SwiftUI
 
 // Usage:
-//   MenuSnapshot <out.png> [--dark] [--confirming] [--theme <name>]
+//   MenuSnapshot <out.png> [--dark] [--access] [--theme <name>]
 //   MenuSnapshot <out.png> --sheet      every candidate theme side by side
 // Loads real status through the CLI (set MAC_HEADROOM_CLI).
 let args = CommandLine.arguments
 let outPath = args.count > 1 ? args[1] : "menu.png"
 let dark = args.contains("--dark")
-let confirming = args.contains("--confirming")
 let asking = args.contains("--access")
 let sheet = args.contains("--sheet")
 let themeName = args.firstIndex(of: "--theme").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
@@ -63,7 +62,7 @@ func main() async throws {
         data = try await render(view, appearance: NSAppearance(named: .aqua))
     } else {
         let theme = Theme.candidates.first { $0.name.lowercased() == themeName?.lowercased() } ?? .system
-        let view = MenuView(startConfirming: confirming, startAskingAccess: asking)
+        let view = MenuView(startAskingAccess: asking)
             .environmentObject(store)
             .environment(\.theme, theme)
             .background(theme.name == "System" ? Color(nsColor: .windowBackgroundColor) : .clear)
