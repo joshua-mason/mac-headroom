@@ -20,8 +20,9 @@ enum Headroom {
         return URL(fileURLWithPath: "/opt/homebrew/bin/mac-headroom")
     }
 
-    /// Run a command with --json and --no-open, off the main thread.
-    static func run(_ args: [String]) async throws -> Data {
+    /// Run a command with --json and --no-open, off the main thread. Lines the
+    /// CLI writes as `progress: <stage>` are passed to `onProgress` as they come.
+    static func run(_ args: [String], onProgress: ((String) -> Void)? = nil) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -41,14 +42,34 @@ enum Headroom {
                 group.enter()
                 DispatchQueue.global().async { stdout = out.fileHandleForReading.readDataToEndOfFile(); group.leave() }
                 group.enter()
-                DispatchQueue.global().async { stderr = err.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+                DispatchQueue.global().async {
+                    let handle = err.fileHandleForReading
+                    var pending = Data()
+                    while true {
+                        let chunk = handle.availableData
+                        if chunk.isEmpty { break }
+                        stderr.append(chunk)
+                        pending.append(chunk)
+                        while let newline = pending.firstIndex(of: 0x0A) {
+                            let line = String(decoding: pending[pending.startIndex..<newline], as: UTF8.self)
+                            pending.removeSubrange(pending.startIndex...newline)
+                            if line.hasPrefix("progress: "), let onProgress {
+                                onProgress(String(line.dropFirst("progress: ".count)))
+                            }
+                        }
+                    }
+                    group.leave()
+                }
                 group.wait()
                 process.waitUntilExit()
                 if process.terminationStatus == 0 {
                     continuation.resume(returning: stdout)
                 } else {
-                    let text = String(data: stderr, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let text = String(decoding: stderr, as: UTF8.self)
+                        .split(separator: "\n")
+                        .filter { !$0.hasPrefix("progress: ") }
+                        .joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                     continuation.resume(throwing: Failure(
                         message: text.isEmpty ? "mac-headroom exited with status \(process.terminationStatus)" : text))
                 }

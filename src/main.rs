@@ -630,18 +630,25 @@ struct ScanSummary {
 /// reading, scan where the space is, size everything that can safely go, look
 /// for the usual large surprises, and put it all in front of them.
 fn scan(json: bool, no_open: bool) {
-    let say = |m: &str| {
-        if !json {
-            eprintln!("{m}");
+    // Stages go to stderr so JSON on stdout stays clean. In JSON mode they are
+    // short fixed words an app can follow; otherwise they are for a person.
+    let say = |stage: &str, text: &str| {
+        if json {
+            eprintln!("progress: {stage}");
+        } else {
+            eprintln!("{text}");
         }
     };
-    say("Checking the disk…");
+    say("disk", "Checking the disk…");
     let disk = diag::report();
-    say("Measuring where the space is. On a full disk this takes a minute or two…");
+    say(
+        "folders",
+        "Measuring where the space is. On a full disk this takes a minute or two…",
+    );
     for root in std::iter::once(home()).chain(config::scan_roots()) {
         growth::report(&root, 3, 100 << 20, 15);
     }
-    say("Working out what can safely be freed…");
+    say("cleaners", "Working out what can safely be freed…");
     let found = findings::gather();
     findings::save(&found);
 

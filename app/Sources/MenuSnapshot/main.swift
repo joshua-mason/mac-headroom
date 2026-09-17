@@ -3,13 +3,14 @@ import MacHeadroomUI
 import SwiftUI
 
 // Usage:
-//   MenuSnapshot <out.png> [--dark] [--access] [--theme <name>]
+//   MenuSnapshot <out.png> [--dark] [--access] [--scanning] [--theme <name>]
 //   MenuSnapshot <out.png> --sheet      every candidate theme side by side
 // Loads real status through the CLI (set MAC_HEADROOM_CLI).
 let args = CommandLine.arguments
 let outPath = args.count > 1 ? args[1] : "menu.png"
 let dark = args.contains("--dark")
 let asking = args.contains("--access")
+let scanning = args.contains("--scanning")
 let sheet = args.contains("--sheet")
 let themeName = args.firstIndex(of: "--theme").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
 
@@ -38,6 +39,7 @@ func main() async throws {
     NSApp.setActivationPolicy(.accessory)
     let store = Store(autoRefresh: false)
     await store.refresh()
+    if scanning { store.previewScanning(step: 1, secondsIn: 34) }
 
     let data: Data
     if sheet {

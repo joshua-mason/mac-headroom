@@ -10,6 +10,13 @@ public final class Store: ObservableObject {
     /// Set after a clean, until the next scan: the saved sizes are out of date.
     @Published var cleaned: CleanResult?
     @Published var reportURL: URL?
+    /// Which stage a scan is on: 0 checking the disk, 1 measuring folders,
+    /// 2 working out what is safe to clear.
+    @Published var scanStep: Int?
+    @Published var scanStarted: Date?
+    /// Advances while scanning, to animate the menu bar item.
+    @Published var spinnerFrame = 0
+    private var spinnerTimer: Timer?
 
     private var timer: Timer?
 
@@ -57,15 +64,47 @@ public final class Store: ObservableObject {
 
     func scan(skipProtected: Bool = false) async {
         scanning = true
-        defer { scanning = false }
+        scanStep = 0
+        scanStarted = Date()
+        startSpinner()
+        defer {
+            scanning = false
+            scanStep = nil
+            scanStarted = nil
+            stopSpinner()
+        }
         do {
-            _ = try await Headroom.run(skipProtected ? ["scan", "--skip-protected"] : ["scan"])
+            let stages = ["disk": 0, "folders": 1, "cleaners": 2]
+            _ = try await Headroom.run(skipProtected ? ["scan", "--skip-protected"] : ["scan"]) { [weak self] stage in
+                Task { @MainActor in
+                    if let step = stages[stage] { self?.scanStep = step }
+                }
+            }
             cleaned = nil
             reportURL = nil
             await refresh()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func startSpinner() {
+        spinnerTimer?.invalidate()
+        spinnerTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.spinnerFrame += 1 }
+        }
+    }
+
+    private func stopSpinner() {
+        spinnerTimer?.invalidate()
+        spinnerTimer = nil
+    }
+
+    /// For the snapshot tool: show a scan in progress without running one.
+    public func previewScanning(step: Int, secondsIn: TimeInterval) {
+        scanning = true
+        scanStep = step
+        scanStarted = Date().addingTimeInterval(-secondsIn)
     }
 
     func clean() async {

@@ -5,8 +5,12 @@ public struct MenuLabel: View {
     @ObservedObject var store: Store
     public init(store: Store) { self.store = store }
 
+    private static let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
     public var body: some View {
-        if let d = store.status?.disk {
+        if store.scanning {
+            Text("\(Image(systemName: "internaldrive")) \(Self.spinner[store.spinnerFrame % Self.spinner.count])")
+        } else if let d = store.status?.disk {
             Text("\(Image(systemName: "internaldrive")) \(formatBytes(d.free))")
         } else {
             Image(systemName: "internaldrive")
@@ -30,6 +34,8 @@ public struct MenuView: View {
     /// The person chose to scan without access; do not ask them every time.
     @AppStorage("scanWithoutAccess") private var scanWithoutAccess = false
 
+    static let height: CGFloat = 548
+
     public init(startAskingAccess: Bool = false) {
         _askingAccess = State(initialValue: startAskingAccess)
     }
@@ -38,12 +44,14 @@ public struct MenuView: View {
         VStack(alignment: .leading, spacing: 20) {
             header
             content
+                .frame(maxHeight: .infinity, alignment: .top)
             if let error = store.error {
                 Text(error)
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer(minLength: 0)
             VStack(spacing: 10) {
                 Rectangle().fill(theme.divider).frame(height: 1)
                 footer
@@ -52,11 +60,9 @@ public struct MenuView: View {
         .padding(.horizontal, 22)
         .padding(.top, 22)
         .padding(.bottom, 14)
-        .frame(width: 360, alignment: .top)
-        // macOS does not always shrink the menu's window when its content gets
-        // shorter. Pin content to the top and paint the whole window, so a
-        // leftover height reads as space rather than a see-through gap.
-        .frame(maxHeight: .infinity, alignment: .top)
+        // One size for every state. When the menu's window changes height,
+        // macOS briefly draws a ghost of its old size, so it never does.
+        .frame(width: 360, height: Self.height, alignment: .top)
         .foregroundStyle(theme.text)
         .background(theme.background.ignoresSafeArea())
         .background(MenuWindowAnchor())
@@ -101,16 +107,8 @@ public struct MenuView: View {
     @ViewBuilder private var content: some View {
         if askingAccess {
             accessCard
-        } else if store.scanning && store.status?.findings == nil {
-            card {
-                HStack(spacing: 12) {
-                    ProgressView().controlSize(.small)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Scanning your disk").font(.system(size: 13, weight: .semibold))
-                        Text("This takes a minute or two.").font(.system(size: 11)).foregroundStyle(theme.secondary)
-                    }
-                }
-            }
+        } else if store.scanning {
+            scanProgress
         } else if store.status?.findings == nil {
             card {
                 VStack(alignment: .leading, spacing: 12) {
@@ -134,12 +132,7 @@ public struct MenuView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Safe to clear").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if store.scanning {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("Scanning…").font(.system(size: 11)).foregroundStyle(theme.secondary)
-                    }
-                } else if let at = store.status?.findings?.at {
+                if let at = store.status?.findings?.at {
                     Text("Scanned \(relativeTime(at))").font(.system(size: 11)).foregroundStyle(theme.tertiary)
                 }
             }
@@ -150,13 +143,14 @@ public struct MenuView: View {
                 VStack(spacing: 0) {
                     ForEach(store.freeable.prefix(5)) { ItemRow(item: $0) }
                 }
-                .opacity(store.scanning ? 0.5 : 1)
                 .padding(4)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.cardStroke ?? .clear))
+                Spacer(minLength: 0)
                 clearControls
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder private var clearControls: some View {
@@ -190,6 +184,64 @@ public struct MenuView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    // MARK: Scanning
+
+    private var scanProgress: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Scanning your disk").font(.system(size: 15, weight: .semibold))
+                    Text("Usually a minute or two. You can close this menu; it carries on.")
+                        .font(.system(size: 11)).foregroundStyle(theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if let started = store.scanStarted {
+                    TimelineView(.periodic(from: started, by: 1)) { context in
+                        Text(elapsed(from: started, to: context.date))
+                            .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            .foregroundStyle(theme.secondary)
+                    }
+                }
+            }
+            SlidingBar()
+            VStack(alignment: .leading, spacing: 14) {
+                stageRow(0, "Checking the disk")
+                stageRow(1, "Measuring where the space is")
+                stageRow(2, "Working out what is safe to clear")
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.cardStroke ?? .clear))
+    }
+
+    private func stageRow(_ index: Int, _ text: String) -> some View {
+        let current = store.scanStep ?? 0
+        return HStack(spacing: 10) {
+            ZStack {
+                if index < current {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.good)
+                } else if index == current {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "circle").foregroundStyle(theme.tertiary)
+                }
+            }
+            .font(.system(size: 14))
+            .frame(width: 18, height: 18)
+            Text(text)
+                .font(.system(size: 13, weight: index == current ? .semibold : .regular))
+                .foregroundStyle(index > current ? theme.tertiary : theme.text)
+        }
+    }
+
+    private func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     // MARK: Asking for access once
@@ -321,6 +373,30 @@ public struct MenuView: View {
 }
 
 // MARK: - Pieces
+
+/// An indeterminate bar: a highlight sliding along the track while work goes on.
+struct SlidingBar: View {
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            GeometryReader { geo in
+                let cycle = 1.6
+                let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: cycle) / cycle
+                let width = geo.size.width * 0.35
+                ZStack(alignment: .leading) {
+                    Capsule().fill(theme.track)
+                    Capsule()
+                        .fill(theme.accent)
+                        .frame(width: width)
+                        .offset(x: -width + (geo.size.width + width) * phase)
+                }
+                .clipShape(Capsule())
+            }
+        }
+        .frame(height: 6)
+    }
+}
 
 struct StatusBadge: View {
     let level: Level
@@ -478,52 +554,24 @@ func relativeTime(_ epoch: UInt64) -> String {
     return formatter.localizedString(for: Date(timeIntervalSince1970: TimeInterval(epoch)), relativeTo: Date())
 }
 
-// MARK: - Keeping the menu attached to the menu bar
+// MARK: - Closing the menu
 
-/// macOS resizes a window by keeping its bottom edge still. For a menu that
-/// hangs from the menu bar that is backwards: whenever the content got shorter,
-/// after clearing or while scanning, the whole menu dropped away from the menu
-/// bar and left a gap above it. This notes where the top was when the menu
-/// opened and puts it back after every resize.
+/// Holds the menu's window so an action that opens another window can close
+/// the menu first. It deliberately does not move or resize the window: an
+/// earlier version repositioned it after resizes, and that pulled the content
+/// away from macOS's own window background. The menu now never changes size.
 struct MenuWindowAnchor: NSViewRepresentable {
     private static weak var current: NSWindow?
 
-    /// Close the menu, for when an action opens a separate window.
     static func close() { current?.orderOut(nil) }
 
     func makeNSView(context: Context) -> NSView { AnchorView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     final class AnchorView: NSView {
-        private var top: CGFloat?
-        private var tokens: [NSObjectProtocol] = []
-
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            tokens.forEach { NotificationCenter.default.removeObserver($0) }
-            tokens = []
-            guard let window else { return }
-            MenuWindowAnchor.current = window
-            top = window.frame.maxY
-            let center = NotificationCenter.default
-            // Opening places the menu correctly, so that is the top to keep.
-            tokens.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
-                self?.top = self?.window?.frame.maxY
-            })
-            tokens.append(center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
-                self?.restoreTop()
-            })
+            if let window { MenuWindowAnchor.current = window }
         }
-
-        private func restoreTop() {
-            guard let window, let top else { return }
-            let frame = window.frame
-            if abs(frame.maxY - top) > 0.5 {
-                window.setFrameOrigin(NSPoint(x: frame.minX, y: top - frame.height))
-            }
-        }
-
-        deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
     }
 }
-
