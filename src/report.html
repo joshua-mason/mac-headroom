@@ -588,13 +588,23 @@ renderLook();
     const covered = scans.reduce((s, r) => s + (change ? 0 : r.total), 0);
     const reconcile = !change && d && d.used > covered;
     if (change) {
-      subtree(g, 0, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
-      extra.forEach(r => subtree(r, 0, tilde(r.root), 'An extra scan root from your config.', true));
+    /* Top-level locations largest first, by size or by how much they changed. */
+      const tops = [[g, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.', false],
+        ...extra.map(r => [r, tilde(r.root), 'Scanned alongside your home folder.', true])]
+        .sort((a, b) => change
+          ? Math.abs(b[0].total - (b[0].previous_total ?? b[0].total)) - Math.abs(a[0].total - (a[0].previous_total ?? a[0].total))
+          : b[0].total - a[0].total);
+      tops.forEach(([scan, label, tip, secondary]) => subtree(scan, 0, label, tip, secondary));
     } else {
       rows.push({ label: 'Your data', v: d ? d.used : covered, depth: 0, parent: true, sum: true,
         tipText: 'Volume Used Space, straight from diskutil. Everything stored on the data volume.' });
-      subtree(g, 1, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
-      extra.forEach(r => subtree(r, 1, tilde(r.root), 'An extra scan root from your config.', true));
+    /* Top-level locations largest first, by size or by how much they changed. */
+      const tops = [[g, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.', false],
+        ...extra.map(r => [r, tilde(r.root), 'Scanned alongside your home folder.', true])]
+        .sort((a, b) => change
+          ? Math.abs(b[0].total - (b[0].previous_total ?? b[0].total)) - Math.abs(a[0].total - (a[0].previous_total ?? a[0].total))
+          : b[0].total - a[0].total);
+      tops.forEach(([scan, label, tip, secondary]) => subtree(scan, 1, label, tip, secondary));
       if (reconcile) {
         const blocked = D.findings && D.findings.full_disk_access === false;
         rows.push({ label: blocked ? 'not accounted for (includes your Trash)' : 'not accounted for', v: d.used - covered, depth: 1, rest: true, unscanned: true,
