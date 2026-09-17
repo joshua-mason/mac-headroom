@@ -17,6 +17,7 @@ public struct MenuLabel: View {
 public struct MenuView: View {
     @EnvironmentObject var store: Store
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.theme) private var theme
     @State private var confirming: Bool
 
     public init(startConfirming: Bool = false) {
@@ -34,7 +35,7 @@ public struct MenuView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(spacing: 10) {
-                Divider().opacity(0.5)
+                Rectangle().fill(theme.divider).frame(height: 1)
                 footer
             }
         }
@@ -42,6 +43,9 @@ public struct MenuView: View {
         .padding(.top, 22)
         .padding(.bottom, 14)
         .frame(width: 360)
+        .foregroundStyle(theme.text)
+        .background(theme.background)
+        .environment(\.colorScheme, theme.scheme)
     }
 
     // MARK: Header
@@ -57,19 +61,19 @@ public struct MenuView: View {
                             .font(.system(size: 34, weight: .semibold, design: .rounded))
                         Text("free")
                             .font(.system(size: 15, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(theme.secondary)
                     }
                     Spacer()
                     StatusBadge(level: level)
                 }
-                UsageBar(fraction: 1 - store.freePercent / 100, tint: level.bar)
+                UsageBar(fraction: 1 - store.freePercent / 100, tint: level.bar(theme))
                 Text("\(formatBytes(d.total - d.free)) used of \(formatBytes(d.total))")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondary)
             } else {
                 Text("Reading your disk…")
                     .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondary)
             }
         }
     }
@@ -83,7 +87,7 @@ public struct MenuView: View {
                     ProgressView().controlSize(.small)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Scanning your disk").font(.system(size: 13, weight: .semibold))
-                        Text("This takes a minute or two.").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("This takes a minute or two.").font(.system(size: 11)).foregroundStyle(theme.secondary)
                     }
                 }
             }
@@ -92,11 +96,11 @@ public struct MenuView: View {
                 HStack(spacing: 12) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 24))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(theme.good)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Freed \(formatBytes(done.bytes))").font(.system(size: 13, weight: .semibold))
                         Text(done.freeAfter.map { "\(formatBytes($0)) free now" } ?? "Done")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .font(.system(size: 11)).foregroundStyle(theme.secondary)
                     }
                 }
             }
@@ -106,11 +110,11 @@ public struct MenuView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("See what you can safely clear").font(.system(size: 13, weight: .semibold))
                         Text("A scan looks at your whole disk for caches and leftovers that are safe to remove.")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .font(.system(size: 11)).foregroundStyle(theme.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Button("Scan now") { Task { await store.scan() } }
-                        .buttonStyle(PillButtonStyle(prominent: true))
+                        .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
                 }
             }
         } else {
@@ -124,18 +128,19 @@ public struct MenuView: View {
                 Text("Safe to clear").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 if let at = store.status?.findings?.at {
-                    Text("Scanned \(relativeTime(at))").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("Scanned \(relativeTime(at))").font(.system(size: 11)).foregroundStyle(theme.tertiary)
                 }
             }
             if store.freeable.isEmpty {
                 Text("Nothing worth clearing right now.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .font(.system(size: 13)).foregroundStyle(theme.secondary)
             } else {
                 VStack(spacing: 0) {
                     ForEach(store.freeable.prefix(5)) { ItemRow(item: $0) }
                 }
                 .padding(4)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.045)))
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.cardStroke ?? .clear))
                 clearControls
             }
         }
@@ -147,31 +152,31 @@ public struct MenuView: View {
             if store.cleaning {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Clearing…").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("Clearing…").font(.system(size: 13)).foregroundStyle(theme.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 32)
             } else if confirming {
                 Text("Apps and tools recreate these when they need them. Nothing personal is removed.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .font(.system(size: 11)).foregroundStyle(theme.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     Button("Cancel") { confirming = false }
-                        .buttonStyle(PillButtonStyle(prominent: false))
+                        .buttonStyle(PillButtonStyle(prominent: false, theme: theme))
                     Button("Clear \(formatBytes(store.clearableNow))") {
                         confirming = false
                         Task { await store.clean() }
                     }
-                    .buttonStyle(PillButtonStyle(prominent: true))
+                    .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
                     .keyboardShortcut(.defaultAction)
                 }
             } else {
                 Button("Clear \(formatBytes(store.clearableNow))") { confirming = true }
-                    .buttonStyle(PillButtonStyle(prominent: true))
+                    .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
                     .disabled(store.clearableNow == 0)
                 if !blocked.names.isEmpty {
                     Text("Quit \(blocked.names.joined(separator: " and ")) to clear another \(formatBytes(blocked.bytes)).")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.system(size: 11)).foregroundStyle(theme.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -198,7 +203,8 @@ public struct MenuView: View {
         content()
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.045)))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.cardStroke ?? .clear))
     }
 }
 
@@ -206,24 +212,27 @@ public struct MenuView: View {
 
 struct StatusBadge: View {
     let level: Level
+    @Environment(\.theme) private var theme
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(level.dot).frame(width: 7, height: 7)
+            Circle().fill(level.dot(theme)).frame(width: 7, height: 7)
             Text(level.words).font(.system(size: 12, weight: .medium))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .background(Capsule().fill(theme.badge))
+        .overlay(Capsule().stroke(theme.cardStroke ?? .clear))
     }
 }
 
 struct UsageBar: View {
     let fraction: Double
     let tint: Color
+    @Environment(\.theme) private var theme
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule().fill(theme.track)
                 Capsule()
                     .fill(LinearGradient(colors: [tint.opacity(0.75), tint], startPoint: .leading, endPoint: .trailing))
                     .frame(width: max(8, geo.size.width * min(max(fraction, 0), 1)))
@@ -235,36 +244,37 @@ struct UsageBar: View {
 
 struct ItemRow: View {
     let item: Estimate
+    @Environment(\.theme) private var theme
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 11) {
             ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.accentColor.opacity(0.13))
+                RoundedRectangle(cornerRadius: 7, style: .continuous).fill(theme.iconTile)
                 Image(systemName: symbol(for: item.name))
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(theme.icon)
             }
             .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 1) {
                 Text(shortTitle(for: item)).font(.system(size: 13)).lineLimit(1)
                 if let app = item.blockedBy {
-                    Text("Needs \(app) closed").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("Needs \(app) closed").font(.system(size: 11)).foregroundStyle(theme.secondary)
                 }
             }
             Spacer(minLength: 8)
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 if item.upperBound {
-                    Text("up to").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("up to").font(.system(size: 11)).foregroundStyle(theme.secondary)
                 }
                 Text(formatBytes(item.bytes ?? 0))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
-                    .foregroundStyle(item.blockedBy == nil ? .primary : .secondary)
+                    .foregroundStyle(item.blockedBy == nil ? theme.text : theme.secondary)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(hovering ? theme.hover : .clear))
         .onHover { hovering = $0 }
         .help("\(item.title). \(item.plain)")
     }
@@ -274,16 +284,17 @@ struct ItemRow: View {
 /// window is active, unlike the system's prominent style.
 struct PillButtonStyle: ButtonStyle {
     let prominent: Bool
+    let theme: Theme
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .frame(maxWidth: .infinity, minHeight: 34)
-            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .foregroundStyle(prominent ? theme.accentText : theme.text)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(prominent ? Color.accentColor : Color.primary.opacity(0.08))
+                    .fill(prominent ? theme.accent : theme.quietButton)
             )
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
             .contentShape(Rectangle())
@@ -291,6 +302,7 @@ struct PillButtonStyle: ButtonStyle {
 }
 
 struct FooterButton: View {
+    @Environment(\.theme) private var theme
     let title: String
     let systemImage: String
     let action: () -> Void
@@ -304,11 +316,11 @@ struct FooterButton: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(hovering && isEnabled ? 0.07 : 0)))
+                    .fill(hovering && isEnabled ? theme.hover : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(theme.secondary)
         .onHover { hovering = $0 }
     }
 }
