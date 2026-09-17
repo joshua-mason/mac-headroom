@@ -81,6 +81,10 @@ pub struct Data {
     audit: Vec<AuditEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_run_log: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    findings: Option<crate::findings::Findings>,
+    /// Each completed weekly routine: when, and free space either side.
+    runs: Vec<Run>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +93,28 @@ struct DiskNow {
     free: u64,
     total: u64,
     other: u64,
+}
+
+#[derive(Serialize)]
+struct Run {
+    at: u64,
+    free_before: u64,
+    free_after: u64,
+}
+
+fn runs() -> Vec<Run> {
+    fs::read_to_string(state_dir().join("runs.tsv"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            Some(Run {
+                at: f.next()?.parse().ok()?,
+                free_before: f.next()?.parse().ok()?,
+                free_after: f.next()?.parse().ok()?,
+            })
+        })
+        .collect()
 }
 
 fn history() -> Vec<Reading> {
@@ -165,8 +191,10 @@ pub fn gather() -> Data {
         config: crate::config::check(),
         cleaners,
         schedule: crate::schedule::status(),
-        audit: audit(25),
+        audit: audit(500),
         last_run_log: last_run_log(),
+        findings: crate::findings::load(),
+        runs: runs(),
     }
 }
 

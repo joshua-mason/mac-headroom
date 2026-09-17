@@ -125,6 +125,63 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
   .node{grid-template-columns:minmax(0,1fr) 96px;gap:10px}
   .node .track{display:none}
 }
+/* overview */
+.statusline{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:0 0 6px}
+.statusline .big{font-size:40px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.level{display:inline-block;font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--axis);color:var(--ink2)}
+.level.good{color:var(--ok);border-color:var(--ok)}
+.level.tight,.level.low{color:#9a5b00;border-color:#d99a2b}
+.level.full{color:var(--warn);border-color:var(--warn)}
+.sub{color:var(--ink2);margin:0 0 14px;max-width:66ch}
+.bar{height:10px;border-radius:5px;background:var(--other);overflow:hidden;margin:14px 0 6px}
+.bar>div{height:100%;background:var(--used)}
+.callout{border-left:3px solid var(--note);padding:10px 14px;margin:18px 0 0;background:var(--surface);max-width:70ch}
+.callout.warn{border-color:var(--warn)}
+.callout.ok{border-color:var(--ok)}
+.callout b{display:block;margin-bottom:2px}
+.lead{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}
+.items{margin:14px 0 0;border-top:1px solid var(--rule)}
+.item{display:grid;grid-template-columns:96px minmax(0,1fr);gap:16px;padding:12px 0;border-bottom:1px solid var(--rule)}
+.item .size{font-weight:600;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.item .size small{display:block;font-weight:400;color:var(--muted);font-size:11px}
+.item .title{font-weight:600}
+.item p{margin:2px 0 0;color:var(--ink2);max-width:68ch}
+.chip{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px;margin-left:8px;vertical-align:1px;border:1px solid var(--axis);color:var(--ink2)}
+.chip.warn{color:#9a5b00;border-color:#d99a2b}
+.chip.bad{color:var(--warn);border-color:var(--warn)}
+code,.cmd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:1px 5px}
+.cmdbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0 0}
+.cmdbox .cmd{padding:7px 10px;font-size:13px}
+.copy{appearance:none;font:inherit;font-size:12px;cursor:pointer;border:1px solid var(--axis);background:var(--page);color:var(--ink2);border-radius:5px;padding:5px 10px}
+.copy:hover{color:var(--ink)}
+.quiet{color:var(--muted);font-size:13px;margin:10px 0 0}
+.card{padding:14px 0;border-bottom:1px solid var(--rule)}
+.card:last-child{border-bottom:0}
+.card .top{display:flex;justify-content:space-between;gap:16px;align-items:baseline}
+.card .title{font-weight:600}
+.card .size{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.card p{margin:4px 0 0;color:var(--ink2);max-width:70ch}
+.card .how{color:var(--ink)}
+.card details{margin-top:6px}
+.card ul{margin:6px 0 0;padding-left:18px;color:var(--ink2);font-size:13px}
+.changes{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:18px;margin:6px 0 0}
+.change .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.change .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.change .n{color:var(--ink2);font-size:13px}
+/* history */
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+.filters select,.filters input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--axis);border-radius:5px;background:var(--page);color:var(--ink)}
+.filters input{min-width:200px}
+.run{border:1px solid var(--rule);border-radius:6px;margin:0 0 10px;background:var(--page)}
+.run>summary{list-style:none;cursor:pointer;padding:10px 14px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:var(--ink)}
+.run>summary::-webkit-details-marker{display:none}
+.run>summary .when{font-weight:600}
+.run>summary .meta2{color:var(--ink2);font-size:13px}
+.run .scroll{padding:0 14px 10px}
+.res{font-size:12px;font-weight:600}
+.res.failed{color:var(--warn)}
+.res.skipped{color:var(--muted)}
+@media (max-width:560px){.item{grid-template-columns:76px minmax(0,1fr);gap:10px}.statusline .big{font-size:32px}}
 </style>
 </head>
 <body>
@@ -134,24 +191,28 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
   <p class="meta" id="meta"></p>
 </header>
 <div id="tip"></div>
-<div class="verdict" id="verdict"></div>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Report sections">
-  <button role="tab" data-panel="space" aria-controls="p-space" aria-selected="true">Space</button>
-  <button role="tab" data-panel="cleaning" aria-controls="p-cleaning" aria-selected="false">Cleaning<span class="n" id="nClean"></span></button>
-  <button role="tab" data-panel="deletions" aria-controls="p-deletions" aria-selected="false">Deletions<span class="n" id="nDel"></span></button>
+  <button role="tab" data-panel="overview" aria-controls="p-overview" aria-selected="true">Overview</button>
+  <button role="tab" data-panel="explore" aria-controls="p-explore" aria-selected="false">Explore</button>
+  <button role="tab" data-panel="history" aria-controls="p-history" aria-selected="false">History<span class="n" id="nRuns"></span></button>
 </nav>
-<div class="panel" id="p-space" role="tabpanel" aria-labelledby="tabs">
+<div class="panel" id="p-overview" role="tabpanel" aria-labelledby="tabs">
+  <section id="status"></section>
+  <section id="changed" hidden></section>
+  <section id="freeable"></section>
+  <section id="look"></section>
+  <section id="weekly" hidden></section>
+</div>
+<div class="panel" id="p-explore" role="tabpanel" aria-labelledby="tabs" hidden>
   <section id="disk"></section>
   <section id="volumes"></section>
   <section id="history"></section>
   <section id="space"></section>
 </div>
-<div class="panel" id="p-cleaning" role="tabpanel" aria-labelledby="tabs" hidden>
+<div class="panel" id="p-history" role="tabpanel" aria-labelledby="tabs" hidden>
   <section id="job"></section>
-  <section id="cleaners"></section>
-</div>
-<div class="panel" id="p-deletions" role="tabpanel" aria-labelledby="tabs" hidden>
   <section id="audit"></section>
+  <section id="cleaners"></section>
 </div>
 </main>
 <script id="data" type="application/json">__DATA__</script>
@@ -175,48 +236,157 @@ const hideTip = () => { tip.style.display = 'none'; };
 
 $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
 
-/* ---------- Verdict: the same call the CLI makes, stated first ---------- */
+/* ---------- helpers for plain text with `code` ---------- */
+const rich = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+const titleOf = name => { const c = (D.cleaners || []).find(c => c.name === name); return c ? (c.title || c.summary || name) : name; };
+const copyBtn = cmd => `<button class="copy" data-copy="${esc(cmd)}">Copy</button>`;
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-copy]');
+  if (!b) return;
+  const text = b.dataset.copy;
+  const done = () => { const o = b.textContent; b.textContent = 'Copied'; setTimeout(() => { b.textContent = o; }, 1400); };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, () => {}); return; }
+  const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch (err) { /* select it for the reader */ }
+  ta.remove();
+});
+const DAY = 86400;
+const H = D.history || [];
+const returning = H.length >= 2 && (H[H.length - 1].at - H[0].at) >= DAY / 2;
+
+/* Days until full, from the trend of free space over the last month. */
+function daysUntilFull() {
+  const recent = H.filter(r => r.at >= D.generated_at - 30 * DAY);
+  if (recent.length < 3 || recent[recent.length - 1].at - recent[0].at < 2 * DAY) return null;
+  const n = recent.length, mx = recent.reduce((s, r) => s + r.at, 0) / n, my = recent.reduce((s, r) => s + r.free, 0) / n;
+  let num = 0, den = 0;
+  for (const r of recent) { num += (r.at - mx) * (r.free - my); den += (r.at - mx) ** 2; }
+  if (!den) return null;
+  const perSec = num / den;
+  if (perSec >= 0) return Infinity;
+  return (recent[recent.length - 1].free) / (-perSec * DAY);
+}
+
+/* ---------- Status ---------- */
 (() => {
-  const H = D.history, n = H.length;
-  let tone = 'note', head = '', body = '';
+  const el = $('status'), d = D.disk;
+  if (!d) { el.innerHTML = '<p class="empty">The disk could not be read.</p>'; return; }
+  const pct = 100 * d.free / d.total;
+  const [lvl, word] = pct < 5 ? ['full', 'Nearly full'] : pct < 8 ? ['low', 'Running low']
+    : pct < 15 ? ['tight', 'Getting tight'] : pct < 25 ? ['good', 'Doing fine'] : ['good', 'Plenty of space'];
+  const days = daysUntilFull();
+  const trend = days == null ? '' : days === Infinity ? ' Free space has not been shrinking lately.'
+    : days > 365 ? ' At the current rate it will not fill up for over a year.'
+    : ` At the rate it has been filling, it will be full in about <b>${Math.max(1, Math.round(days))} days</b>.`;
+
+  /* Hidden space: the check the tool exists for, in plain words. */
+  let hidden = '';
   if (D.update_snapshot_pinned) {
-    tone = 'warn';
-    head = 'A staged macOS update is holding on to disk space';
-    body = 'Those snapshots do not show up in a directory scan and do not count as used space either. Installing the pending update and rebooting is the only thing that releases them. Look for files only after that.';
-  } else if (n < 2) {
-    head = n ? 'One reading so far' : 'No readings yet';
-    body = 'Each diagnose and each weekly run records used and free space. Two readings are enough to tell whether space is going to files or somewhere a scan cannot see.';
-  } else {
-    const a = H[n - 2], b = H[n - 1];
-    const du = b.used - a.used, df = b.free - a.free, gap = -df - du;
-    const span = ago(a.at);
-    if (gap > 2 * GB) {
-      tone = 'warn';
-      head = `${h(gap)} of free space is unaccounted for`;
-      body = `Since ${span}, free space fell by ${h(-df)} but the data volume only grew by ${h(du)}. The difference is not in any file. It is almost always an APFS snapshot from a staged macOS update, or purgeable space yet to be released.`;
-    } else if (du > 5 * GB) {
-      head = `Real files added ${h(du)}`;
-      body = `Since ${span}, used and free moved together, so nothing is hidden. The space went into files. The space section below shows which directory took it.`;
-    } else {
-      tone = 'ok';
-      head = 'Nothing is hiding';
-      body = `Since ${span}, used and free moved together: ${sg(du)} used against ${sg(df)} free. Space is accounted for by files you can see.`;
-    }
+    hidden = `<div class="callout warn"><b>A macOS update is holding on to space</b>macOS has downloaded an update and is keeping a snapshot of your disk until it is installed. That space does not appear in Finder or anywhere below. Installing the update and restarting gives it back.</div>`;
+  } else if (H.length >= 2) {
+    const a = H[H.length - 2], b = H[H.length - 1];
+    const gap = -(b.free - a.free) - (b.used - a.used);
+    hidden = gap > 2 * GB
+      ? `<div class="callout warn"><b>About ${h(gap)} is being held by macOS</b>Since ${day(a.at)}, free space fell by more than your files grew. That difference is not in any folder. It is usually temporary space macOS keeps for an update or a backup; restarting or installing a pending update normally releases it.</div>`
+      : `<div class="callout ok"><b>Nothing is hiding</b>The space your files use matches what the disk reports, so everything taking up room can be found in the sections below.</div>`;
   }
-  $('verdict').className = 'verdict ' + tone;
-  $('verdict').innerHTML = `<p class="head">${esc(head)}</p><p class="body">${esc(body)}</p>`;
+  const job = D.schedule && D.schedule.installed
+    ? `<p class="quiet">The weekly check is on${D.schedule.schedule ? ` (${esc(D.schedule.schedule)})` : ''}.${D.schedule.last_run ? ' Last run ' + esc(D.schedule.last_run.split(' (')[0]) + '.' : ''}</p>` : '';
+  el.innerHTML = `
+    <div class="statusline"><span class="big num">${h(d.free)} free</span><span class="level ${lvl}">${word}</span></div>
+    <p class="sub">That is ${pct.toFixed(0)}% of your ${h(d.total)} disk.${trend}</p>
+    <div class="bar" title="${pct.toFixed(0)}% free"><div style="width:${(100 - pct).toFixed(1)}%"></div></div>
+    ${hidden}${job}`;
+})();
+
+/* ---------- What changed (returning visitors only) ---------- */
+(() => {
+  if (!returning) return;
+  const el = $('changed');
+  el.hidden = false;
+  const last = H[H.length - 1];
+  const target = D.generated_at - 7 * DAY;
+  const base = H.reduce((best, r) => Math.abs(r.at - target) < Math.abs(best.at - target) ? r : best, H[0]);
+  const du = last.used - base.used, df = last.free - base.free;
+  const runs = (D.runs || []).filter(r => r.at >= base.at);
+  const freed = runs.reduce((s, r) => s + Math.max(0, r.free_after - r.free_before), 0);
+
+  /* The folders that explain the growth, preferring the deepest one that does. */
+  let growers = [];
+  const g = D.growth;
+  if (g && g.previous_at != null) {
+    const cand = g.entries.filter(e => (e.delta || 0) >= 100 * 1024 * 1024);
+    growers = cand.filter(e => !cand.some(o => o !== e && o.path.startsWith(e.path + '/') && o.delta >= 0.6 * e.delta))
+      .sort((a, b) => b.delta - a.delta).slice(0, 3);
+  }
+  el.innerHTML = `<h2>Since ${day(base.at)}</h2>
+    <div class="changes">
+      <div class="change"><div class="k">Your files</div><div class="v">${sg(du)}</div></div>
+      <div class="change"><div class="k">Free space</div><div class="v">${sg(df)}</div></div>
+      <div class="change"><div class="k">Cleaning freed</div><div class="v">${runs.length ? h(freed) : '—'}</div><div class="n">${runs.length ? `${runs.length} run${runs.length > 1 ? 's' : ''}` : 'no runs yet'}</div></div>
+    </div>
+    ${growers.length ? `<p class="sub" style="margin-top:16px">Grew the most: ${growers.map(e => `<b>${esc(tilde(e.path))}</b> ${sg(e.delta)}`).join(', ')}.</p>` : ''}`;
+})();
+
+/* ---------- Safe to free now ---------- */
+(() => {
+  const el = $('freeable'), F = D.findings;
+  if (!F) {
+    el.innerHTML = `<p class="lead">Find out what you can free</p><p class="sub">Run this in Terminal. It looks at your whole disk and opens this page again with everything filled in.</p><div class="cmdbox"><span class="cmd">mac-headroom</span>${copyBtn('mac-headroom')}</div>`;
+    return;
+  }
+  const items = F.reclaimable.filter(e => (e.bytes || 0) >= 1024 * 1024).sort((a, b) => b.bytes - a.bytes);
+  const empty = F.reclaimable.filter(e => !((e.bytes || 0) >= 1024 * 1024) && !e.note);
+  const total = items.reduce((s, e) => s + e.bytes, 0);
+  const blocked = [...new Set(items.filter(e => e.blocked_by).map(e => e.blocked_by))];
+  const stale = D.generated_at - F.at > 2 * DAY ? ` <span class="muted">(measured ${day(F.at)})</span>` : '';
+  el.innerHTML = `<p class="lead">${items.length ? `You can safely free about ${h(total)}` : 'Nothing obvious to clear right now'}${stale}</p>
+    <p class="sub">These are copies and leftovers that apps and tools recreate or no longer need. None of it is your documents, photos or projects.</p>
+    ${items.length ? `<div class="items">${items.map(e => `
+      <div class="item">
+        <div class="size">${e.upper_bound ? '<small>up to</small>' : ''}${h(e.bytes)}</div>
+        <div><span class="title">${esc(e.title)}</span>${e.blocked_by ? `<span class="chip warn">Quit ${esc(e.blocked_by)} first</span>` : ''}<p>${esc(e.plain)}</p></div>
+      </div>`).join('')}</div>
+    <div class="cmdbox"><span class="cmd">mac-headroom clean --yes</span>${copyBtn('mac-headroom clean --yes')}<span class="quiet" style="margin:0">Removes all of the above.${blocked.length ? ` Quit ${blocked.map(esc).join(' and ')} first, or those are skipped.` : ''}</span></div>
+    <p class="quiet">Want to see every file first? <code>mac-headroom clean</code> lists exactly what would go, without removing anything.</p>` : ''}
+    ${empty.length ? `<p class="quiet">Already clean: ${empty.map(e => esc(e.title)).join(', ')}.</p>` : ''}`;
+})();
+
+/* ---------- Worth a look ---------- */
+(() => {
+  const el = $('look'), F = D.findings;
+  if (!F || !F.detections.length) { el.hidden = true; return; }
+  el.innerHTML = `<p class="lead">Worth a look, your call</p>
+    <p class="sub">Large things that are often a surprise, especially after installing developer tools. Some of it you may well want to keep, so nothing here is removed automatically.</p>
+    ${F.detections.map(x => `<div class="card">
+      <div class="top"><span class="title">${esc(x.title)}</span><span class="size">${h(x.bytes)}</span></div>
+      <p>${rich(x.what)}</p>
+      <p class="how">${rich(x.how)}</p>
+      ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
+      ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
+    </div>`).join('')}`;
+})();
+
+/* ---------- Offer the weekly check ---------- */
+(() => {
+  if (D.schedule && D.schedule.installed) return;
+  const el = $('weekly');
+  el.hidden = false;
+  el.innerHTML = `<p class="lead">Get a weekly check</p>
+    <p class="sub">Caches fill up again over time. A weekly check clears the safe items above, keeps a record so this page can show what is growing, and sends a notification if your disk gets close to full.</p>
+    <div class="cmdbox"><span class="cmd">mac-headroom schedule install</span>${copyBtn('mac-headroom schedule install')}</div>`;
 })();
 
 /* ---------- Disk now ---------- */
 (() => {
   const d = D.disk, el = $('disk');
-  if (!d) { el.innerHTML = '<h2>Disk</h2><p class="empty">diskutil was unavailable.</p>'; return; }
+  if (!d) { el.innerHTML = '<h2>Your disk</h2><p class="empty">The disk figures could not be read.</p>'; return; }
   const pc = x => (100 * x / d.total).toFixed(0) + '%';
-  el.innerHTML = `<h2>Disk</h2>
+  el.innerHTML = `<h2>Your disk</h2>
     <div class="figs">
       <div class="fig lead"><div class="k">Free</div><div class="v num">${h(d.free)}</div></div>
-      <div class="fig"><div class="k">Your data</div><div class="v num">${h(d.used)}</div></div>
-      <div class="fig"><div class="k">System and purgeable</div><div class="v num">${h(d.other)}</div></div>
+      <div class="fig"><div class="k">Your files and apps</div><div class="v num">${h(d.used)}</div></div>
+      <div class="fig"><div class="k">macOS and system</div><div class="v num">${h(d.other)}</div></div>
       <div class="fig"><div class="k">Capacity</div><div class="v num">${h(d.total)}</div></div>
     </div>
     <div class="comp">
@@ -228,7 +398,7 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <span><i class="sw" style="background:var(--other)"></i>system and purgeable ${pc(d.other)}</span>
       <span><i class="sw" style="background:var(--page);box-shadow:inset 0 0 0 1px var(--axis)"></i>free ${pc(d.free)}</span>
     </div>
-    <p class="cap">Every figure here comes from <span class="mono">diskutil</span>. Your data and free space are measured; system and purgeable is what is left over once those two are taken off the capacity, so it covers the sealed macOS system volume, virtual memory, Preboot and Recovery, plus anything snapshots are pinning.</p>
+    <p class="cap">The "macOS and system" part is what System Settings calls <b>System Data</b>, and it confuses almost everyone. It is space macOS manages itself: the operating system, memory it has swapped to disk, and recovery tools. You cannot clear it directly and most of it is normal. The section below shows exactly what it is made of.</p>
     ${D.snapshots.length ? `<p class="cap">${D.snapshots.length} local snapshot${D.snapshots.length > 1 ? 's' : ''}: <span class="mono">${D.snapshots.map(esc).join('<br>')}</span></p>` : ''}`;
 })();
 
@@ -243,8 +413,8 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <div class="track"><div class="bar" style="left:0;width:${100 * x.bytes / max}%;${x.is_data ? '' : 'opacity:.45'}"></div></div>
       <div class="amt">${h(x.bytes)}</div></div>`).join('');
   const imgRows = imgs.map(i => `<tr><td class="r">${h(i.backing_bytes)}</td><td class="mono">${esc(tilde(i.backing_path))}</td></tr>`).join('');
-  el.innerHTML = `<h2>What else shares this disk</h2>
-    <p class="cap" style="margin:0 0 16px">A directory scan only ever sees one filesystem. These volumes sit in the same container and draw on the same free space, which is what the ${D.disk ? h(D.disk.other) + ' of ' : ''}system and purgeable space above actually consists of. <b>${h(hidden)}</b> of it is beyond the reach of any scan.</p>
+  el.innerHTML = `<h2>What System Data is made of</h2>
+    <p class="cap" style="margin:0 0 16px">Your disk is divided into parts that share the same free space. Only one of them holds your files. The rest belong to macOS: <b>VM</b> is memory swapped to disk, <b>Preboot</b> and <b>Recovery</b> are what your Mac uses to start up and repair itself. Together they account for <b>${h(hidden)}</b>, and none of it shows up in Finder.</p>
     <div class="tree">${rows}</div>
     ${imgs.length ? `<p class="cap" style="margin-top:20px">Disk images are mounted as volumes, but the space belongs to the file each one is read from. Those files are counted where they live, not where they appear.</p>
     <div class="scroll" style="margin-top:12px"><table><tr><th class="r" style="width:90px">Size</th><th>File it is read from</th></tr>${imgRows}</table></div>` : ''}`;
@@ -294,7 +464,7 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       <text class="ax" x="${L}" y="${HT - 12}">${day(H[0].at)}</text>
       <text class="ax" x="${W - R}" y="${HT - 12}" text-anchor="end">${day(last.at)}</text>
     </svg>
-    <p class="cap">The two bands are what the disk can account for. The space between them and the capacity line is everything else: the system volume, virtual memory, purgeable files and any snapshots. Right now that gap is <b>${h(gap)}</b>. When it widens while the bands shrink, space is being pinned rather than spent.</p>
+    <p class="cap">Blue is your files, orange is free space, and the gap up to the dashed line is macOS's own share, currently <b>${h(gap)}</b>. If that gap grows while free space shrinks, macOS is holding on to space (usually for an update) rather than your files growing.</p>
     ${young ? HINT : ''}
     <details><summary>All ${H.length} readings</summary><div class="scroll"><table>
       <tr><th>When</th><th class="r">Your data</th><th class="r">Free</th><th class="r">Unaccounted</th></tr>
@@ -482,72 +652,79 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
   draw();
 })();
 
-/* ---------- Weekly job ---------- */
+/* ---------- Weekly check health ---------- */
 (() => {
   const s = D.schedule, el = $('job');
   if (!s.installed) {
-    el.innerHTML = `<h2>Weekly job</h2><p class="empty">Not set up. <span class="mono">mac-headroom schedule install</span> adds a launchd job that runs diagnose, a growth scan and the cleaners you name, once a week. That is also what fills in the history above.</p>`;
+    el.innerHTML = `<h2>Weekly check</h2><p class="empty">Not set up. <code>mac-headroom schedule install</code> clears the safe items once a week and warns you when space runs low.</p>`;
     return;
   }
-  el.innerHTML = `<h2>Weekly job</h2>
-    <table>
-      <tr><th style="width:130px">Status</th><td><span class="dot ${s.loaded ? 'on' : 'no'}"></span>${s.loaded ? 'registered with launchd' : 'plist present but launchd does not have it'}</td></tr>
-      <tr><th>Runs</th><td>${esc(s.schedule || '?')}, or on next wake</td></tr>
-      <tr><th>Cleans</th><td>${s.cleaners.length ? s.cleaners.map(esc).join(', ') : 'every enabled cleaner'}</td></tr>
-      <tr><th>Binary</th><td class="mono">${esc(s.binary || '?')}${s.binary_exists ? '' : ' — missing, reinstall'}</td></tr>
-      <tr><th>Last run</th><td>${s.last_run ? esc(s.last_run) : 'never'}</td></tr>
+  const A = D.audit || [];
+  const lastAt = A.length ? Math.max(...A.map(a => a.at)) : null;
+  const failed = A.filter(a => a.at === lastAt && a.result === 'failed');
+  el.innerHTML = `<h2>Weekly check</h2>
+    ${failed.length ? `<div class="callout warn" style="margin-top:0"><b>${failed.length} item${failed.length > 1 ? 's' : ''} failed on the last run</b>${failed.map(f => `${esc(titleOf(f.cleaner))}${f.detail ? `: <span class="muted">${esc(f.detail)}</span>` : ''}`).join('<br>')}</div>`
+      : A.length ? `<div class="callout ok" style="margin-top:0"><b>Healthy</b>Everything on the last run worked.</div>` : ''}
+    <table style="margin-top:16px">
+      <tr><th style="width:130px">Status</th><td><span class="dot ${s.loaded ? 'on' : 'no'}"></span>${s.loaded ? 'On' : 'Installed but not running; run schedule install again'}</td></tr>
+      <tr><th>Runs</th><td>${esc(s.schedule || '?')}, or when your Mac next wakes</td></tr>
+      <tr><th>Low space alert</th><td>${s.watch_loaded ? `Checks hourly, notifies under ${s.alert_below_percent}% free` : 'Off'}</td></tr>
+      <tr><th>Last run</th><td>${s.last_run ? esc(s.last_run) : 'Not yet'}</td></tr>
     </table>
-    ${D.last_run_log ? `<details><summary>Output of the last run</summary><pre>${esc(D.last_run_log)}</pre></details>` : ''}`;
+    ${D.last_run_log ? `<details><summary>Full output of the last run</summary><pre>${esc(D.last_run_log)}</pre></details>` : ''}`;
 })();
 
-/* ---------- Cleaners ---------- */
+/* ---------- Deletions, grouped by run, filterable ---------- */
 (() => {
-  const el = $('cleaners'), c = D.config, list = D.cleaners;
-  const on = list.filter(k => !k.disabled), off = list.filter(k => k.disabled);
-  const what = k => k.command && k.command.length ? `<span class="mono">${esc(k.command.join(' '))}</span>`
-    : `<span class="mono">${(k.paths || []).map(esc).join('<br>')}</span>`;
-  const rule = k => [
-    k.skip_if_running ? `skipped while ${esc(k.skip_if_running)} is open` : '',
-    k.keep_newest != null ? `keeps the newest ${k.keep_newest} in each directory` : '',
-    k.older_than_days != null ? `only when untouched for ${k.older_than_days} days` : ''
-  ].filter(Boolean).join(' · ');
-  const row = k => `<tr class="${k.disabled ? 'off' : ''}">
-      <td class="mono" style="white-space:nowrap">${esc(k.name)}</td>
-      <td>${esc(k.summary)}<div class="muted" style="margin-top:2px">${esc(k.why_safe)}</div>
-        ${rule(k) ? `<div class="muted" style="margin-top:2px">${rule(k)}</div>` : ''}</td>
-      <td>${what(k)}</td>
-      <td class="r muted">${k.source === 'config' ? 'yours' : 'built in'}</td>
-    </tr>`;
-  const problems = (c.problems.length
-    ? `<p class="cap" style="color:var(--warn)">${c.problems.map(esc).join('<br>')}</p>` : '')
-    + ((c.notes || []).length
-    ? `<p class="cap muted">${c.notes.map(esc).join('<br>')}</p>` : '');
-  el.innerHTML = `<h2>Cleaners</h2>
-    <p class="cap" style="margin:0 0 18px">${on.length} enabled${off.length ? `, ${off.length} turned off` : ''}. ${c.exists
-      ? `Yours are defined in <span class="mono">${esc(tilde(c.path))}</span>.`
-      : 'Built-ins only. <span class="mono">mac-headroom config init</span> starts a config file.'} Nothing here runs without <span class="mono">--yes</span>.</p>
-    ${problems}
-    <div class="scroll"><table>
-      <tr><th>Name</th><th>What it clears, and why that is safe</th><th>Where</th><th class="r">Source</th></tr>
-      ${on.map(row).join('')}${off.map(row).join('')}
-    </table></div>`;
-})();
-
-/* ---------- Deletions ---------- */
-(() => {
-  const el = $('audit'), A = D.audit;
+  const el = $('audit'), A = D.audit || [];
   if (!A.length) {
-    el.innerHTML = '<h2>Deletions</h2><p class="empty">mac-headroom has not deleted anything on this machine. Every real deletion is appended to an audit log, so if a file goes missing you can rule this tool in or out.</p>';
+    el.innerHTML = '<h2>What has been removed</h2><p class="empty">Nothing yet. Everything mac-headroom removes is recorded here, so if something ever goes missing you can check whether this was the cause.</p>';
     return;
   }
-  const total = A.reduce((s, a) => s + (a.bytes || 0), 0);
-  const unmeasured = A.filter(a => a.bytes == null).length;
-  el.innerHTML = `<h2>Deletions</h2>
-    <p class="cap" style="margin:0 0 18px">Last ${A.length}, ${h(total)} measured in total${unmeasured ? `, plus ${unmeasured} runs of a tool's own clean command that were not measured (shown as —)` : ''}. Every deletion is recorded, so a missing file can be traced back or ruled out.</p>
-    <div class="scroll"><table>
-      <tr><th>When</th><th>Cleaner</th><th>Result</th><th class="r">Size</th><th>Path or command</th></tr>
-      ${A.map(a => `<tr><td style="white-space:nowrap">${when(a.at)}</td><td class="mono">${esc(a.cleaner)}</td><td>${esc(a.result)}</td><td class="r">${a.bytes == null ? '<span class="muted" title="Not measured">—</span>' : h(a.bytes)}</td><td class="mono">${esc(tilde(a.path))}${a.detail ? `<div class="muted" style="font-family:inherit;margin-top:2px">${esc(a.detail)}</div>` : ''}</td></tr>`).join('')}
-    </table></div>`;
+  const cleanersIn = [...new Set(A.map(a => a.cleaner))].sort((a, b) => titleOf(a).localeCompare(titleOf(b)));
+  el.innerHTML = `<h2>What has been removed</h2>
+    <p class="sub">Every removal is recorded, so if something ever goes missing you can check whether this was the cause. A dash means a tool cleaned its own cache and the amount could not be measured.</p>
+    <div class="filters">
+      <select id="fCleaner"><option value="">Every cleaner</option>${cleanersIn.map(c => `<option value="${esc(c)}">${esc(titleOf(c))}</option>`).join('')}</select>
+      <select id="fResult"><option value="">Every result</option><option value="deleted">Removed</option><option value="ran">Ran</option><option value="failed">Failed</option></select>
+      <input id="fText" type="search" placeholder="Search paths">
+      <span class="quiet" id="fCount" style="margin:0"></span>
+    </div>
+    <div id="runs"></div>`;
+  const label = r => r === 'deleted' ? 'Removed' : r === 'ran' ? 'Ran' : r === 'failed' ? 'Failed' : r;
+  function draw() {
+    const fc = $('fCleaner').value, fr = $('fResult').value, ft = $('fText').value.trim().toLowerCase();
+    const rows = A.filter(a => (!fc || a.cleaner === fc) && (!fr || a.result === fr) && (!ft || a.path.toLowerCase().includes(ft)));
+    const groups = new Map();
+    for (const r of rows) { if (!groups.has(r.at)) groups.set(r.at, []); groups.get(r.at).push(r); }
+    const ordered = [...groups.entries()].sort((a, b) => b[0] - a[0]);
+    $('fCount').textContent = `Showing ${rows.length} of ${A.length}`;
+    $('runs').innerHTML = ordered.length ? ordered.map(([at, rs], i) => {
+      const freed = rs.reduce((s, r) => s + (r.bytes || 0), 0);
+      const fails = rs.filter(r => r.result === 'failed').length;
+      return `<details class="run" ${i < 3 ? 'open' : ''}>
+        <summary><span class="when">${when(at)}</span><span class="meta2">${rs.length} item${rs.length > 1 ? 's' : ''} · ${h(freed)} measured${fails ? ` · <span class="res failed">${fails} failed</span>` : ''}</span></summary>
+        <div class="scroll"><table>
+          <tr><th>What</th><th>Result</th><th class="r">Size</th><th>Path or command</th></tr>
+          ${rs.map(r => `<tr><td>${esc(titleOf(r.cleaner))}</td><td><span class="res ${esc(r.result)}">${esc(label(r.result))}</span></td><td class="r">${r.bytes == null ? '<span class="muted" title="Not measured">—</span>' : h(r.bytes)}</td><td class="mono">${esc(tilde(r.path))}${r.detail ? `<div class="muted" style="font-family:inherit;margin-top:2px">${esc(r.detail)}</div>` : ''}</td></tr>`).join('')}
+        </table></div></details>`;
+    }).join('') : '<p class="empty">Nothing matches those filters.</p>';
+  }
+  ['fCleaner', 'fResult', 'fText'].forEach(id => $(id).addEventListener('input', draw));
+  draw();
+})();
+
+/* ---------- Every cleaner, for reference ---------- */
+(() => {
+  const el = $('cleaners'), c = D.config, list = D.cleaners || [];
+  const rows = list.map(k => `<tr class="${k.disabled ? 'off' : ''}">
+      <td><b>${esc(k.title || k.summary)}</b><div class="muted mono" style="margin-top:2px">${esc(k.name)}${k.opt_in ? ' · only when asked for by name' : ''}${k.disabled ? ' · turned off' : ''}</div></td>
+      <td>${esc(k.plain || k.why_safe)}${k.plain ? `<details><summary class="quiet" style="display:list-item">Why this is safe, in detail</summary><p class="muted">${esc(k.why_safe)}</p></details>` : ''}</td>
+    </tr>`).join('');
+  el.innerHTML = `<details><summary><h2 style="display:inline">Every cleaner, in detail</h2></summary>
+    <p class="sub" style="margin-top:12px">${c.exists ? `Your own cleaners are in <code>${esc(tilde(c.path))}</code>.` : 'Add your own with <code>mac-headroom config init</code>.'}</p>
+    ${c.problems.length ? `<p class="cap" style="color:var(--warn)">${c.problems.map(esc).join('<br>')}</p>` : ''}
+    <div class="scroll"><table><tr><th>Cleaner</th><th>What it removes</th></tr>${rows}</table></div></details>`;
 })();
 
 /* ---------- Tabs ---------- */
@@ -561,7 +738,6 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
       t.tabIndex = on ? 0 : -1;
       $('p-' + t.dataset.panel).hidden = !on;
     });
-    // Remembering the tab is a convenience; a private window may refuse.
     try { localStorage.setItem('mh-tab', name); } catch (e) { /* not important */ }
     if (location.hash.slice(1) !== name) {
       try { history.replaceState(null, '', '#' + name); } catch (e) { /* file:// */ }
@@ -579,16 +755,11 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
     next.focus();
     show(next.dataset.panel);
   });
-
-  const enabled = (D.cleaners || []).filter(c => !c.disabled).length;
-  if (enabled) $('nClean').textContent = enabled;
-  if ((D.audit || []).length) $('nDel').textContent = D.audit.length;
-
-  let start = location.hash.slice(1);
-  if (!names.includes(start)) {
-    try { start = localStorage.getItem('mh-tab'); } catch (e) { start = null; }
-  }
-  show(names.includes(start) ? start : 'space');
+  const runsCount = new Set((D.audit || []).map(a => a.at)).size;
+  if (runsCount) $('nRuns').textContent = runsCount;
+  /* Always land on the overview: it is the answer. A link can still open another tab. */
+  const start = location.hash.slice(1);
+  show(names.includes(start) ? start : 'overview');
   addEventListener('hashchange', () => {
     const n = location.hash.slice(1);
     if (names.includes(n)) show(n);

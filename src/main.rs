@@ -2,6 +2,7 @@ mod alert;
 mod cleaners;
 mod config;
 mod diag;
+mod findings;
 mod growth;
 mod orphans;
 mod report;
@@ -25,12 +26,20 @@ struct Cli {
     /// Emit JSON instead of text. Works with every subcommand.
     #[arg(long, global = true)]
     json: bool,
+    /// With no command, scan everything and open the report. That is the whole
+    /// first run for someone whose disk is full.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
+    /// With no command or with `scan`: write the report without opening it
+    #[arg(long, global = true)]
+    no_open: bool,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Look at everything, find what can be freed, and open the report.
+    /// What running mac-headroom on its own does.
+    Scan,
     /// Report disk usage and check for APFS snapshot pinning
     Diagnose,
     /// List the available cleaners and why each is safe
@@ -83,9 +92,6 @@ enum Cmd {
         /// Where to write it (default: the state directory)
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
-        /// Write the file without opening a browser
-        #[arg(long)]
-        no_open: bool,
     },
 }
 
@@ -147,7 +153,12 @@ fn emit<T: Serialize>(value: &T) {
 
 fn main() {
     let cli = Cli::parse();
-    match cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        scan(cli.json, cli.no_open);
+        return;
+    };
+    match cmd {
+        Cmd::Scan => scan(cli.json, cli.no_open),
         Cmd::Diagnose => {
             let Some(r) = diag::report() else {
                 eprintln!("could not read diskutil info for /System/Volumes/Data");
@@ -308,7 +319,8 @@ fn main() {
                 alert::print_text(&c)
             }
         }
-        Cmd::Report { out, no_open } => {
+        Cmd::Report { out } => {
+            let no_open = cli.no_open;
             let data = report::gather();
             let out = out.unwrap_or_else(report::default_path);
             if let Err(e) = report::write(&data, &out) {
@@ -551,5 +563,102 @@ fn audit(r: &CleanReport) {
                 status.trim_matches('"')
             );
         }
+    }
+}
+
+#[derive(Serialize)]
+struct ScanSummary {
+    free: Option<u64>,
+    total: Option<u64>,
+    safe_to_free: u64,
+    report: PathBuf,
+    findings: findings::Findings,
+}
+
+/// The first run. Someone installed this because their disk is full: record a
+/// reading, scan where the space is, size everything that can safely go, look
+/// for the usual large surprises, and put it all in front of them.
+fn scan(json: bool, no_open: bool) {
+    let say = |m: &str| {
+        if !json {
+            eprintln!("{m}");
+        }
+    };
+    say("Checking the disk…");
+    let disk = diag::report();
+    say("Measuring where the space is. On a full disk this takes a minute or two…");
+    for root in std::iter::once(home()).chain(config::scan_roots()) {
+        growth::report(&root, 3, 100 << 20, 15);
+    }
+    say("Working out what can safely be freed…");
+    let found = findings::gather();
+    findings::save(&found);
+
+    let path = report::default_path();
+    if let Err(e) = report::write(&report::gather(), &path) {
+        eprintln!("could not write the report: {e}");
+        std::process::exit(1);
+    }
+    let safe: u64 = found
+        .reclaimable
+        .iter()
+        .filter_map(|e| e.bytes)
+        .filter(|b| *b >= 1 << 20)
+        .sum();
+
+    if json {
+        emit(&ScanSummary {
+            free: disk.as_ref().map(|d| d.free),
+            total: disk.as_ref().map(|d| d.total),
+            safe_to_free: safe,
+            report: path.clone(),
+            findings: found,
+        });
+    } else {
+        println!();
+        if let Some(d) = &disk {
+            let pct = 100.0 * d.free as f64 / d.total.max(1) as f64;
+            println!("{} free of {} ({pct:.0}%)", human(d.free), human(d.total));
+        }
+        let mut items: Vec<&cleaners::Estimate> = found
+            .reclaimable
+            .iter()
+            .filter(|e| e.bytes.unwrap_or(0) > 0)
+            .collect();
+        items.sort_by_key(|e| std::cmp::Reverse(e.bytes.unwrap_or(0)));
+        if items.is_empty() {
+            println!("\nNothing obvious to clear right now.");
+        } else {
+            println!("\nSafe to free now, about {}:", human(safe));
+            for e in items.iter().take(8) {
+                let extra = match &e.blocked_by {
+                    Some(app) => format!("  (quit {app} first)"),
+                    None if e.upper_bound => "  (up to)".to_string(),
+                    None => String::new(),
+                };
+                println!("  {:>9}  {}{extra}", human(e.bytes.unwrap_or(0)), e.title);
+            }
+        }
+        if !found.detections.is_empty() {
+            println!("\nWorth a look, your call:");
+            for d in found.detections.iter().take(6) {
+                println!("  {:>9}  {}", human(d.bytes), d.title);
+            }
+        }
+        println!(
+            "\nThe full picture, with what each of these is: {}",
+            path.display()
+        );
+        println!("\nNext:");
+        println!("  mac-headroom clean          see exactly what would be removed");
+        println!("  mac-headroom clean --yes    remove it");
+        if !schedule::status().installed {
+            println!(
+                "  mac-headroom schedule install    check every week and warn when space runs low"
+            );
+        }
+    }
+    if !no_open && !report::open(&path) {
+        eprintln!("could not open a browser; open the file above by hand");
     }
 }

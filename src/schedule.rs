@@ -617,6 +617,9 @@ pub fn run(only: &[String], growth: bool) {
     let report = crate::run_clean(false, true, only);
     let free_after = crate::diag::disk().map(|d| d.free);
     record_run(free_before, free_after);
+    // Refresh what can be freed and what is worth a look, after cleaning, so
+    // the report describes the disk as it now is.
+    crate::findings::save(&crate::findings::gather());
     // Leave a current report behind, so the weekly picture is ready to open.
     let report_path = crate::report::default_path();
     match crate::report::write(&crate::report::gather(), &report_path) {

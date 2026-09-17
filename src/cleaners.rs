@@ -56,6 +56,14 @@ pub struct Cleaner {
     /// what it still references, rather than by matching a path.
     #[serde(skip)]
     pub orphans: Option<&'static crate::orphans::OrphanSpec>,
+    /// A name someone who has never heard of the underlying tool would
+    /// recognise. The report leads with this; `name` stays the stable handle.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// One or two plain sentences: what this is and why removing it is fine.
+    /// `why_safe` carries the precise reasoning for people who want it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub plain: String,
 }
 
 fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &[&str]) -> Cleaner {
@@ -73,6 +81,16 @@ fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &
         opt_in: false,
         measure: vec![],
         orphans: None,
+        title: String::new(),
+        plain: String::new(),
+    }
+}
+
+impl Cleaner {
+    fn with_plain(mut self, title: &str, plain: &str) -> Self {
+        self.title = title.into();
+        self.plain = plain.into();
+        self
     }
 }
 
@@ -106,6 +124,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "Rebuilt on the next build. Skipped while Xcode is open so a live build is not disrupted.",
             Some("Xcode"),
             &["~/Library/Developer/Xcode/DerivedData/*"],
+        )
+        .with_plain(
+            "Xcode build leftovers",
+            "Temporary files Xcode makes while it builds apps. Xcode recreates them the next time you build.",
         ),
         paths(
             "updater-leftovers",
@@ -117,6 +139,10 @@ pub fn builtins() -> Vec<Cleaner> {
                 "~/Library/Caches/com.tinyspeck.slackmacgap.ShipIt/*",
                 "~/Library/Caches/electron/*",
             ],
+        )
+        .with_plain(
+            "Old app update downloads",
+            "Copies of updates that apps like VS Code and Slack have already installed. Nothing uses them any more.",
         ),
         paths(
             "language-caches",
@@ -129,6 +155,10 @@ pub fn builtins() -> Vec<Cleaner> {
                 "~/Library/Caches/node-gyp/*",
                 "~/Library/Caches/typescript/*",
             ],
+        )
+        .with_plain(
+            "Downloaded programming packages",
+            "Packages kept by tools such as Python's pip and Swift. They download again if a project needs them.",
         ),
         paths(
             "spotify-cache",
@@ -136,6 +166,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "Streamed audio only. Playlists and downloads for offline live elsewhere. Skipped while Spotify is open.",
             Some("Spotify"),
             &["~/Library/Caches/com.spotify.client/*"],
+        )
+        .with_plain(
+            "Spotify's music cache",
+            "Songs Spotify saved while you streamed. Your playlists and any music you downloaded for offline listening are not affected.",
         ),
         paths(
             "chrome-cache",
@@ -147,6 +181,10 @@ pub fn builtins() -> Vec<Cleaner> {
                 "~/Library/Caches/Google/Chrome/*/Code Cache",
                 "~/Library/Caches/Google/Chrome/*/GPUCache",
             ],
+        )
+        .with_plain(
+            "Chrome's web cache",
+            "Images and files Chrome saved to load websites faster. Your bookmarks, passwords, history and logins are not touched.",
         ),
         cmd(
             "npm-cache",
@@ -154,6 +192,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "npm's own cache clean. Packages re-download on the next install.",
             &["npm", "cache", "clean", "--force"],
             &["npm", "config", "get", "cache"],
+        )
+        .with_plain(
+            "Downloaded JavaScript packages (npm)",
+            "Copies of code libraries that npm downloaded for your projects. They download again whenever a project needs them.",
         ),
         cmd(
             "pnpm-store",
@@ -161,6 +203,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "pnpm's own prune. It removes only packages no project references.",
             &["pnpm", "store", "prune"],
             &["pnpm", "store", "path"],
+        )
+        .with_plain(
+            "Unused JavaScript packages (pnpm)",
+            "Packages that none of your projects use any more. Anything still in use is kept.",
         ),
         cmd(
             "uv-cache",
@@ -168,6 +214,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "uv's own cache clean. Wheels re-download on the next sync.",
             &["uv", "cache", "clean"],
             &["uv", "cache", "dir"],
+        )
+        .with_plain(
+            "Downloaded Python packages (uv)",
+            "Copies of Python libraries that uv downloaded. They download again whenever a project needs them.",
         ),
         cmd(
             "go-build-cache",
@@ -175,6 +225,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "Go's own clean. The next build recompiles.",
             &["go", "clean", "-cache"],
             &["go", "env", "GOCACHE"],
+        )
+        .with_plain(
+            "Go build cache",
+            "Compiled pieces Go keeps so builds are quicker. Go rebuilds them when it needs them.",
         ),
         orphan_cleaner(
             "whatsapp-orphans",
@@ -182,6 +236,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "Every file is checked against WhatsApp's own database, including its write-ahead log, and only files that nothing in it references are removed. Re-linking the Mac as a device replaces that database, which strands everything downloaded under the old one: the app cannot see those files, so its storage screen never frees them. Anything still on your phone or within WhatsApp's retention re-downloads when you scroll back. Skipped while WhatsApp is open, and refused outright if the database cannot be read.",
             Some("WhatsApp"),
             &crate::orphans::WHATSAPP,
+        )
+        .with_plain(
+            "WhatsApp files it has forgotten",
+            "Photos and videos WhatsApp downloaded and then lost track of, usually after you logged in again. WhatsApp itself cannot see or remove them.",
         ),
         cmd(
             "homebrew",
@@ -189,6 +247,10 @@ pub fn builtins() -> Vec<Cleaner> {
             "brew cleanup with --prune=all. Keeps every installed formula, removes only downloads and superseded versions.",
             &["brew", "cleanup", "-s", "--prune=all"],
             &["brew", "--cache"],
+        )
+        .with_plain(
+            "Homebrew leftovers",
+            "Old versions and installer downloads left by Homebrew, the tool that installs command line programs. The programs you have installed stay.",
         ),
     ]
 }
@@ -367,6 +429,72 @@ fn candidates(c: &Cleaner) -> Vec<(PathBuf, Option<String>)> {
         }
     }
     out
+}
+
+/// What a cleaner could free right now, found without deleting anything.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Estimate {
+    pub name: String,
+    pub title: String,
+    pub plain: String,
+    /// None when it cannot be measured, for instance a tool that is not installed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+    /// True for a tool's own clean command: this is the size of its cache, and
+    /// the command may free less than all of it.
+    pub upper_bound: bool,
+    /// An app that has to be closed before this can run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub opt_in: bool,
+}
+
+/// Size what a cleaner would remove, reading only. Unlike a dry run, an app
+/// being open does not hide the figure; it is reported as what to close first.
+pub fn estimate(c: &Cleaner) -> Estimate {
+    let mut e = Estimate {
+        name: c.name.clone(),
+        title: if c.title.is_empty() {
+            c.summary.clone()
+        } else {
+            c.title.clone()
+        },
+        plain: if c.plain.is_empty() {
+            c.why_safe.clone()
+        } else {
+            c.plain.clone()
+        },
+        bytes: None,
+        upper_bound: false,
+        blocked_by: c.skip_if_running.clone().filter(|p| is_running(p)),
+        note: None,
+        opt_in: c.opt_in,
+    };
+    if c.orphans.is_some() {
+        e.note = Some("reported under things worth a look".into());
+        return e;
+    }
+    if !c.command.is_empty() {
+        if !on_path(&c.command[0]) {
+            e.note = Some(format!("{} is not installed", c.command[0]));
+            return e;
+        }
+        if let Some(dir) = measure_dir(&c.measure) {
+            e.bytes = Some(disk_usage(&dir));
+            e.upper_bound = true;
+        }
+        return e;
+    }
+    e.bytes = Some(
+        candidates(c)
+            .into_iter()
+            .filter(|(_, kept)| kept.is_none())
+            .map(|(p, _)| disk_usage(&p))
+            .sum(),
+    );
+    e
 }
 
 /// Ask a tool where its cache lives. Anything that is not an existing absolute
