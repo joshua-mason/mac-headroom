@@ -193,7 +193,8 @@ tells the agent the order of operations and the deletion rules.
 
 ## Install
 
-```
+```sh
+brew install joshua-mason/tap/mac-headroom   # or
 cargo install mac-headroom
 ```
 
