@@ -183,6 +183,35 @@ fn plist(exe: &str, weekday: u8, hour: u8, minute: u8, only: &[String], growth: 
     )
 }
 
+/// The path to record in a launch agent, preferring a name that will still
+/// exist after an upgrade.
+///
+/// Resolving symlinks is the obvious thing to do and the wrong one. Homebrew
+/// puts a symlink in its bin directory pointing into a Cellar directory named
+/// for the version, so following it pins the job to a release that the next
+/// `brew upgrade` deletes, and the job then fails silently every week. If a
+/// directory on PATH holds a name that resolves to this same binary, that name
+/// is the stable one and is what gets recorded.
+fn stable_exe() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let real = exe.canonicalize().unwrap_or_else(|_| exe.clone());
+    let Some(name) = real.file_name() else {
+        return Ok(real);
+    };
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join(name);
+            if candidate == real {
+                continue;
+            }
+            if candidate.is_file() && candidate.canonicalize().is_ok_and(|c| c == real) {
+                return Ok(candidate);
+            }
+        }
+    }
+    Ok(real)
+}
+
 fn launchctl(args: &[&str]) -> bool {
     Command::new("launchctl")
         .args(args)
@@ -237,10 +266,7 @@ pub fn install(
             ));
         }
     }
-    let exe = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
+    let exe = stable_exe()?;
     let path = plist_path();
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -298,6 +324,11 @@ pub fn install(
     if exe.components().any(|c| c.as_os_str() == "target") {
         println!(
             "WARNING: that binary is inside a cargo build directory and will vanish on `cargo clean`. Prefer `cargo install --path .` then reinstall."
+        );
+    }
+    if exe.components().any(|c| c.as_os_str() == "Cellar") {
+        println!(
+            "WARNING: that path names a specific version and an upgrade will remove it. Re-run `mac-headroom schedule install` after upgrading."
         );
     }
     println!("Run it now with: mac-headroom schedule run");
@@ -455,6 +486,11 @@ pub fn print_status(s: &Status) {
     };
     println!("  cleans   {what}");
     let bin = s.binary.as_deref().unwrap_or("?");
+    if bin.contains("/Cellar/") {
+        println!(
+            "  NOTE     that path names one version; re-run schedule install after an upgrade"
+        );
+    }
     println!(
         "  binary   {bin}{}",
         if s.binary_exists {
@@ -562,6 +598,38 @@ pub fn run(only: &[String], growth: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefers_a_stable_name_over_a_versioned_one() {
+        // A symlink on PATH standing in for Homebrew's bin entry.
+        let root = std::env::temp_dir().join(format!("mh-exe-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&root);
+        let cellar = root.join("Cellar/thing/1.2.3/bin");
+        let bin = root.join("bin");
+        fs::create_dir_all(&cellar).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let real = cellar.join("thing");
+        fs::write(&real, b"#!/bin/sh\n").unwrap();
+        std::os::unix::fs::symlink(&real, bin.join("thing")).unwrap();
+
+        // stable_exe looks the current binary up by name on PATH; emulate that
+        // resolution directly, since the test binary is not the one installed.
+        let found = std::env::split_paths(&bin.clone().into_os_string())
+            .map(|d| d.join("thing"))
+            .find(|c| {
+                c.is_file()
+                    && c.canonicalize()
+                        .is_ok_and(|r| r == real.canonicalize().unwrap())
+            })
+            .unwrap();
+        assert_eq!(
+            found,
+            bin.join("thing"),
+            "the stable name, not the Cellar path"
+        );
+        assert!(!found.components().any(|c| c.as_os_str() == "Cellar"));
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn weekday_names() {
