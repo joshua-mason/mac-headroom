@@ -7,6 +7,7 @@ mod growth;
 mod orphans;
 mod report;
 mod schedule;
+mod suggest;
 mod util;
 mod volumes;
 
@@ -79,6 +80,12 @@ enum Cmd {
     },
     /// One-screen overview: disk, config, weekly job, recorded history
     Status,
+    /// Suggest something to become a built-in cleaner. Opens a pre-filled GitHub
+    /// issue for you to check; nothing is sent unless you submit it.
+    Suggest {
+        /// One of your own cleaners, or a path. Leave out for a blank suggestion.
+        target: Option<String>,
+    },
     /// What else shares this disk: other volumes in the container, and mounted images
     Volumes,
     /// Look at free space and notify if it is low. Cheap enough to run hourly.
@@ -300,6 +307,22 @@ fn main() {
                 print_overview(&s)
             }
         }
+        Cmd::Suggest { target } => match suggest::build(target.as_deref()) {
+            Ok(sg) => {
+                if cli.json {
+                    emit(&sg);
+                } else {
+                    suggest::print_text(&sg);
+                }
+                if !cli.no_open && !cli.json {
+                    let _ = std::process::Command::new("open").arg(&sg.url).status();
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
         Cmd::Volumes => {
             let v = volumes::gather();
             if cli.json {

@@ -63,6 +63,7 @@ pub struct Data {
     generated_at: u64,
     host: String,
     version: &'static str,
+    repository: &'static str,
     home: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     disk: Option<DiskNow>,
@@ -165,6 +166,7 @@ pub fn gather() -> Data {
         generated_at: now(),
         host: hostname(),
         version: env!("CARGO_PKG_VERSION"),
+        repository: crate::suggest::REPOSITORY,
         home: home().to_string_lossy().into_owned(),
         disk: crate::diag::disk().map(|d| DiskNow {
             used: d.used,

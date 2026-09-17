@@ -43,6 +43,20 @@ pub fn full_disk_access() -> Option<bool> {
     None
 }
 
+/// Percent-encode a value for a URL query string.
+pub fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 pub fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME is not set"))
 }
@@ -151,6 +165,12 @@ pub fn stdout_of(cmd: &str, args: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_encoding_keeps_only_unreserved_characters() {
+        assert_eq!(url_encode("a b/~c"), "a%20b%2F~c");
+        assert_eq!(url_encode("línea\n"), "l%C3%ADnea%0A");
+    }
 
     #[test]
     fn human_units() {

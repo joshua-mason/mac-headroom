@@ -133,8 +133,10 @@ pre{background:var(--surface);border:1px solid var(--rule);border-radius:4px;pad
 .level.tight,.level.low{color:#9a5b00;border-color:#d99a2b}
 .level.full{color:var(--warn);border-color:var(--warn)}
 .sub{color:var(--ink2);margin:0 0 14px;max-width:66ch}
-.bar{height:10px;border-radius:5px;background:var(--other);overflow:hidden;margin:14px 0 6px}
-.bar>div{height:100%;background:var(--used)}
+/* The status meter. Not .bar: the tree and volume rows already use that class,
+   and a margin here shifted every one of their bars off its row. */
+.fillbar{height:10px;border-radius:5px;background:var(--other);overflow:hidden;margin:14px 0 6px}
+.fillbar>div{height:100%;background:var(--used)}
 .callout{border-left:3px solid var(--note);padding:10px 14px;margin:18px 0 0;background:var(--surface);max-width:70ch}
 .callout.warn{border-color:var(--warn)}
 .callout.ok{border-color:var(--ok)}
@@ -242,6 +244,20 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
 const rich = t => esc(t).replace(/`([^`]+)`/g, '<code>$1</code>');
 const titleOf = name => { const c = (D.cleaners || []).find(c => c.name === name); return c ? (c.title || c.summary || name) : name; };
 const copyBtn = cmd => `<button class="copy" data-copy="${esc(cmd)}">Copy</button>`;
+/* A GitHub issue form, pre-filled. Nothing is sent: the reader checks it and decides. */
+const suggestUrl = (fields = {}) => {
+  let u = `${D.repository}/issues/new?template=suggest-cleaner.yml`;
+  for (const [k, v] of Object.entries(fields)) if (v) u += `&${k}=${encodeURIComponent(v)}`;
+  return u;
+};
+const tomlStr = v => '"' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+const configEntry = k => ['[[cleaner]]', `name = ${tomlStr(k.name)}`, `summary = ${tomlStr(k.summary)}`, `why_safe = ${tomlStr(k.why_safe)}`,
+  k.paths && k.paths.length ? `paths = [${k.paths.map(tomlStr).join(', ')}]` : '',
+  k.command && k.command.length ? `command = [${k.command.map(tomlStr).join(', ')}]` : '',
+  k.keep_newest != null ? `keep_newest = ${k.keep_newest}` : '',
+  k.older_than_days != null ? `older_than_days = ${k.older_than_days}` : '',
+  k.skip_if_running ? `skip_if_running = ${tomlStr(k.skip_if_running)}` : ''].filter(Boolean).join('\n');
+const suggestLine = `<p class="quiet">Know something else that takes up space and is safe to clear? <a href="${suggestUrl()}" target="_blank" rel="noopener">Suggest it as a built-in</a>, or run <code>mac-headroom suggest</code>.</p>`;
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-copy]');
   if (!b) return;
@@ -297,7 +313,7 @@ function daysUntilFull() {
   el.innerHTML = `
     <div class="statusline"><span class="big num">${h(d.free)} free</span><span class="level ${lvl}">${word}</span></div>
     <p class="sub">That is ${pct.toFixed(0)}% of your ${h(d.total)} disk.${trend}</p>
-    <div class="bar" title="${pct.toFixed(0)}% free"><div style="width:${(100 - pct).toFixed(1)}%"></div></div>
+    <div class="fillbar" title="${pct.toFixed(0)}% free"><div style="width:${(100 - pct).toFixed(1)}%"></div></div>
     ${hidden}${job}`;
 })();
 
@@ -378,24 +394,10 @@ function renderLook() {
       <p class="how">${rich(x.how)}</p>
       ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
       ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
-    </div>`).join('')}`;
+    </div>`).join('')}
+    ${suggestLine}`;
 }
 renderLook();
-
-/* ---------- Worth a look ---------- */
-(() => {
-  const el = $('look'), F = D.findings;
-  if (!F || !F.detections.length) { el.hidden = true; return; }
-  el.innerHTML = `<p class="lead">Worth a look, your call</p>
-    <p class="sub">Large things that are often a surprise, especially after installing developer tools. Some of it you may well want to keep, so nothing here is removed automatically.</p>
-    ${F.detections.map(x => `<div class="card">
-      <div class="top"><span class="title">${esc(x.title)}</span><span class="size">${h(x.bytes)}</span></div>
-      <p>${rich(x.what)}</p>
-      <p class="how">${rich(x.how)}</p>
-      ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
-      ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
-    </div>`).join('')}`;
-})();
 
 /* ---------- Offer the weekly check ---------- */
 (() => {
@@ -424,8 +426,8 @@ renderLook();
       <div style="width:${100 * d.other / d.total}%;background:var(--other)" data-tip="<b>System, VM, purgeable</b><br>${h(d.other)} · ${pc(d.other)}"></div>
     </div>
     <div class="keys">
-      <span><i class="sw" style="background:var(--used)"></i>your data ${pc(d.used)}</span>
-      <span><i class="sw" style="background:var(--other)"></i>system and purgeable ${pc(d.other)}</span>
+      <span><i class="sw" style="background:var(--used)"></i>your files and apps ${pc(d.used)}</span>
+      <span><i class="sw" style="background:var(--other)"></i>macOS and system ${pc(d.other)}</span>
       <span><i class="sw" style="background:var(--page);box-shadow:inset 0 0 0 1px var(--axis)"></i>free ${pc(d.free)}</span>
     </div>
     <p class="cap">The "macOS and system" part is what System Settings calls <b>System Data</b>, and it confuses almost everyone. It is space macOS manages itself: the operating system, memory it has swapped to disk, and recovery tools. You cannot clear it directly and most of it is normal. The section below shows exactly what it is made of.</p>
@@ -476,10 +478,10 @@ renderLook();
   const young = last.at - H[0].at < 7 * 86400;
   el.innerHTML = `<h2>Space over time</h2>
     <div class="keys" style="margin-bottom:10px">
-      <span><i class="sw" style="background:var(--used)"></i>your data</span>
+      <span><i class="sw" style="background:var(--used)"></i>your files and apps</span>
       <span><i class="sw" style="background:var(--free)"></i>free</span>
       <span><i class="ln" style="background:var(--ink2)"></i>capacity</span>
-      <span class="muted">scale in GB · gap below the line is system, VM, purgeable and any snapshots</span>
+      <span class="muted">in GB · the gap below the line is macOS's own share</span>
     </div>
     <svg viewBox="0 0 ${W} ${HT}" id="hsvg" role="img" aria-label="Used and free space stacked against capacity">
       <g>${grid}</g>
@@ -687,7 +689,8 @@ renderLook();
     <div class="treebar"><span class="muted" id="treecount"></span><span><button id="expand">expand all</button> · <button id="collapse">collapse all</button></span></div>
     <div class="tree" id="tree"></div>
     <p class="floor" id="unscanned" style="display:none"></p>
-    ${skipped ? `<p class="floor">${skipped.toLocaleString()} entries could not be read, almost always inside a system directory, so those totals are a floor rather than the whole figure. Running a scan with sudo would close the gap.</p>` : ''}`;
+    ${skipped ? `<p class="floor">${skipped.toLocaleString()} entries could not be read, almost always inside a system directory, so those totals are a floor rather than the whole figure. They are files only macOS itself can read.</p>` : ''}
+    ${suggestLine}`;
   const set = m => { mode = m; $('mSize').setAttribute('aria-pressed', m === 'size'); $('mChange').setAttribute('aria-pressed', m === 'change'); draw(); };
   $('mSize').onclick = () => set('size');
   $('mChange').onclick = () => { if (canChange) set('change'); };
@@ -770,7 +773,8 @@ renderLook();
 (() => {
   const el = $('cleaners'), c = D.config, list = D.cleaners || [];
   const rows = list.map(k => `<tr class="${k.disabled ? 'off' : ''}">
-      <td><b>${esc(k.title || k.summary)}</b><div class="muted mono" style="margin-top:2px">${esc(k.name)}${k.opt_in ? ' · only when asked for by name' : ''}${k.disabled ? ' · turned off' : ''}</div></td>
+      <td><b>${esc(k.title || k.summary)}</b><div class="muted mono" style="margin-top:2px">${esc(k.name)}${k.opt_in ? ' · only when asked for by name' : ''}${k.disabled ? ' · turned off' : ''}</div>${k.source === 'config'
+        ? `<div style="margin-top:4px"><a href="${esc(suggestUrl({ title: 'Cleaner: ' + k.summary, what: k.summary, locations: (k.paths || []).join('\n'), why_safe: k.why_safe, config: configEntry(k) }))}" target="_blank" rel="noopener">Suggest adding this to mac-headroom</a></div>` : ''}</td>
       <td>${esc(k.plain || k.why_safe)}${k.plain ? `<details><summary class="quiet" style="display:list-item">Why this is safe, in detail</summary><p class="muted">${esc(k.why_safe)}</p></details>` : ''}</td>
     </tr>`).join('');
   el.innerHTML = `<details><summary><h2 style="display:inline">Every cleaner, in detail</h2></summary>
