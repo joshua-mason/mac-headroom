@@ -57,6 +57,65 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
+static SKIP_PROTECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn on scanning that never reads a folder macOS guards with a privacy
+/// prompt. Without Full Disk Access, an app walking into each of these makes
+/// macOS stop and ask the person, one folder at a time.
+pub fn set_skip_protected(on: bool) {
+    SKIP_PROTECTED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn skipping_protected() -> bool {
+    SKIP_PROTECTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Home-relative locations macOS protects: reading them either prompts
+/// (Desktop, Documents, Downloads, Photos, other apps' data) or needs Full
+/// Disk Access (Mail, Messages, Safari, the Trash and similar).
+const PROTECTED: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    ".Trash",
+    "Library/Mail",
+    "Library/Messages",
+    "Library/Safari",
+    "Library/Calendars",
+    "Library/Reminders",
+    "Library/Containers",
+    "Library/Group Containers",
+    "Library/Mobile Documents",
+    "Library/Cookies",
+    "Library/Suggestions",
+    "Library/HomeKit",
+    "Library/IdentityServices",
+    "Library/Accounts",
+    "Library/Biome",
+    "Library/Metadata/CoreSpotlight",
+    "Library/PersonalizationPortrait",
+    "Library/Application Support/AddressBook",
+    "Library/Application Support/CallHistoryDB",
+    "Library/Application Support/CallHistoryTransactions",
+    "Library/Application Support/MobileSync",
+    "Library/Application Support/com.apple.TCC",
+    "Library/Application Support/Knowledge",
+];
+
+/// Whether a path should be left alone because protected folders are being skipped.
+pub fn skip_protected(path: &Path) -> bool {
+    if !skipping_protected() {
+        return false;
+    }
+    if path.extension().is_some_and(|e| e == "photoslibrary") {
+        return true;
+    }
+    let Ok(rel) = path.strip_prefix(home()) else {
+        return false;
+    };
+    PROTECTED.iter().any(|p| rel == Path::new(p))
+}
+
 pub fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME is not set"))
 }
@@ -165,6 +224,25 @@ pub fn stdout_of(cmd: &str, args: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protected_folders_are_only_skipped_when_asked() {
+        let docs = home().join("Documents");
+        set_skip_protected(false);
+        assert!(!skip_protected(&docs));
+        set_skip_protected(true);
+        assert!(skip_protected(&docs));
+        assert!(skip_protected(&home().join("Library/Group Containers")));
+        assert!(skip_protected(Path::new(
+            "/Users/x/Pictures/Photos Library.photoslibrary"
+        )));
+        assert!(!skip_protected(&home().join("Library/Caches")));
+        assert!(
+            !skip_protected(&home().join("Documents/project")),
+            "only the folder itself is filtered"
+        );
+        set_skip_protected(false);
+    }
 
     #[test]
     fn url_encoding_keeps_only_unreserved_characters() {

@@ -26,9 +26,14 @@ public struct MenuView: View {
         injected.name != Theme.system.name ? injected : (Theme.named(chosen) ?? .clean)
     }
     @State private var confirming: Bool
+    /// Showing the explanation of Full Disk Access instead of starting a scan.
+    @State private var askingAccess = false
+    /// The person chose to scan without access; do not ask them every time.
+    @AppStorage("scanWithoutAccess") private var scanWithoutAccess = false
 
-    public init(startConfirming: Bool = false) {
+    public init(startConfirming: Bool = false, startAskingAccess: Bool = false) {
         _confirming = State(initialValue: startConfirming)
+        _askingAccess = State(initialValue: startAskingAccess)
     }
 
     public var body: some View {
@@ -49,9 +54,15 @@ public struct MenuView: View {
         .padding(.horizontal, 22)
         .padding(.top, 22)
         .padding(.bottom, 14)
-        .frame(width: 360)
+        .frame(width: 360, alignment: .top)
+        // macOS does not always shrink the menu's window when its content gets
+        // shorter. Pin content to the top and paint the whole window, so a
+        // leftover height reads as space rather than a see-through gap.
+        .frame(maxHeight: .infinity, alignment: .top)
         .foregroundStyle(theme.text)
-        .background(theme.background)
+        .background(theme.background.ignoresSafeArea())
+        .onAppear { Task { await store.refresh() } }
+        .task(id: askingAccess) { await waitForAccess() }
         .environment(\.theme, theme)
         .environment(\.colorScheme, theme.scheme)
     }
@@ -89,7 +100,9 @@ public struct MenuView: View {
     // MARK: Content
 
     @ViewBuilder private var content: some View {
-        if store.scanning {
+        if askingAccess {
+            accessCard
+        } else if store.scanning && store.status?.findings == nil {
             card {
                 HStack(spacing: 12) {
                     ProgressView().controlSize(.small)
@@ -121,7 +134,7 @@ public struct MenuView: View {
                             .font(.system(size: 11)).foregroundStyle(theme.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Button("Scan now") { Task { await store.scan() } }
+                    Button("Scan now") { startScan() }
                         .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
                 }
             }
@@ -135,7 +148,12 @@ public struct MenuView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Safe to clear").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if let at = store.status?.findings?.at {
+                if store.scanning {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Scanning…").font(.system(size: 11)).foregroundStyle(theme.secondary)
+                    }
+                } else if let at = store.status?.findings?.at {
                     Text("Scanned \(relativeTime(at))").font(.system(size: 11)).foregroundStyle(theme.tertiary)
                 }
             }
@@ -146,6 +164,7 @@ public struct MenuView: View {
                 VStack(spacing: 0) {
                     ForEach(store.freeable.prefix(5)) { ItemRow(item: $0) }
                 }
+                .opacity(store.scanning ? 0.5 : 1)
                 .padding(4)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.cardStroke ?? .clear))
@@ -181,7 +200,7 @@ public struct MenuView: View {
             } else {
                 Button("Clear \(formatBytes(store.clearableNow))") { confirming = true }
                     .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
-                    .disabled(store.clearableNow == 0)
+                    .disabled(store.clearableNow == 0 || store.scanning)
                 if !blocked.names.isEmpty {
                     Text("Quit \(blocked.names.joined(separator: " and ")) to clear another \(formatBytes(blocked.bytes)).")
                         .font(.system(size: 11)).foregroundStyle(theme.secondary)
@@ -192,11 +211,93 @@ public struct MenuView: View {
         }
     }
 
+    // MARK: Asking for access once
+
+    private func startScan() {
+        if store.status?.fullDiskAccess == true {
+            Task { await store.scan() }
+        } else if scanWithoutAccess {
+            Task { await store.scan(skipProtected: true) }
+        } else {
+            askingAccess = true
+        }
+    }
+
+    /// While the explanation is showing, notice the moment access is granted in
+    /// System Settings and carry straight on with a full scan.
+    private func waitForAccess() async {
+        guard askingAccess else { return }
+        while askingAccess && !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await store.refresh()
+            if store.status?.fullDiskAccess == true {
+                askingAccess = false
+                scanWithoutAccess = false
+                await store.scan()
+                return
+            }
+        }
+    }
+
+    private var accessCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.iconTile)
+                        Image(systemName: "lock.open").font(.system(size: 14, weight: .semibold)).foregroundStyle(theme.icon)
+                    }
+                    .frame(width: 32, height: 32)
+                    Text("Let mac-headroom see your whole disk")
+                        .font(.system(size: 13, weight: .semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Without Full Disk Access, macOS stops to ask about Photos, Documents, Downloads and other apps' data one folder at a time. Turning it on once covers all of them, and nothing leaves your Mac.")
+                    .font(.system(size: 11)).foregroundStyle(theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    step(1, "Open System Settings")
+                    step(2, "Turn on mac-headroom. If it is not listed, press + and choose it.")
+                    step(3, "Come back. The scan starts on its own.")
+                }
+                VStack(spacing: 8) {
+                    Button("Open System Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(PillButtonStyle(prominent: true, theme: theme))
+                    Button("Scan without it") {
+                        askingAccess = false
+                        scanWithoutAccess = true
+                        Task { await store.scan(skipProtected: true) }
+                    }
+                    .buttonStyle(PillButtonStyle(prominent: false, theme: theme))
+                    Text("Skips those folders, so you are not asked anything.")
+                        .font(.system(size: 11)).foregroundStyle(theme.tertiary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+
+    private func step(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(n)")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(theme.accentText)
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(theme.accent))
+            Text(text).font(.system(size: 11)).foregroundStyle(theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: Footer
 
     private var footer: some View {
         HStack(spacing: 2) {
-            FooterButton(title: "Scan", systemImage: "arrow.clockwise") { Task { await store.scan() } }
+            FooterButton(title: "Scan", systemImage: "arrow.clockwise") { startScan() }
                 .disabled(store.scanning || store.cleaning)
             FooterButton(title: "Full report", systemImage: "doc.text.magnifyingglass") {
                 openWindow(id: "report")

@@ -26,6 +26,10 @@ pub struct Findings {
     /// the scan, which can leave a very large amount unexplained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_disk_access: Option<bool>,
+    /// True when protected folders were deliberately left out to avoid privacy
+    /// prompts, so the report can say exactly what it did not look at.
+    #[serde(default)]
+    pub skipped_protected: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,7 +63,7 @@ pub fn load() -> Option<Findings> {
 }
 
 fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &str, how: &str) {
-    if !path.exists() {
+    if crate::util::skip_protected(&path) || !path.exists() {
         return;
     }
     let bytes = disk_usage(&path);
@@ -95,7 +99,7 @@ fn project_roots(h: &Path) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = names
         .iter()
         .map(|n| h.join(n))
-        .filter(|p| p.is_dir())
+        .filter(|p| !crate::util::skip_protected(p) && p.is_dir())
         .collect();
     // Drop any root already inside another, so nothing is counted twice.
     roots.sort();
@@ -126,7 +130,9 @@ fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized) {
                 continue;
             }
             let name = e.file_name().to_string_lossy();
-            if name == "node_modules" {
+            if crate::util::skip_protected(e.path()) {
+                it.skip_current_dir();
+            } else if name == "node_modules" {
                 node.push((e.path().to_path_buf(), disk_usage(e.path())));
                 it.skip_current_dir();
             } else if name == ".git" || name == "Library" || name == ".Trash" {
@@ -220,7 +226,7 @@ pub fn detections() -> Vec<Detection> {
         "Each Python project can have its own environment holding the libraries it uses.",
         "Delete environments for projects you are not working on. They can be recreated from the project's requirements.");
 
-    if !is_running("WhatsApp") {
+    if !crate::util::skipping_protected() && !is_running("WhatsApp") {
         if let Ok(orphans) = crate::orphans::find(&crate::orphans::WHATSAPP) {
             let bytes: u64 = orphans.iter().map(|p| disk_usage(p)).sum();
             if bytes >= WORTH_A_LOOK {
@@ -253,5 +259,6 @@ pub fn gather() -> Findings {
         reclaimable,
         detections: detections(),
         full_disk_access: crate::util::full_disk_access(),
+        skipped_protected: crate::util::skipping_protected(),
     }
 }

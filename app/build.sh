@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build mac-headroom.app: the SwiftUI menu bar app with the Rust CLI inside it.
-# Signed ad hoc, which runs on this Mac. Distribution needs Developer ID signing
-# and notarisation, which this does not do yet.
+# Signed with a Developer ID when one is installed. Distribution also needs the
+# hardened runtime and notarisation, which this does not do yet.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
@@ -19,6 +19,17 @@ cp .build/release/MacHeadroom "$APP/Contents/MacOS/"
 cp "$ROOT/target/release/mac-headroom" "$APP/Contents/MacOS/"
 cp Info.plist "$APP/Contents/"
 
-codesign --force --sign - "$APP/Contents/MacOS/mac-headroom"
-codesign --force --sign - "$APP"
+# Sign with a real identity when there is one. macOS ties privacy permissions
+# to the signature; an ad hoc signature changes with every build, so each
+# rebuild would look like a new app and every permission would be forgotten.
+IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')"
+if [ -n "$IDENTITY" ]; then
+  echo "Signing as $IDENTITY"
+  SIGN="$IDENTITY"
+else
+  echo "No Developer ID found; signing ad hoc, so permissions reset on every build."
+  SIGN="-"
+fi
+codesign --force --sign "$SIGN" "$APP/Contents/MacOS/mac-headroom"
+codesign --force --sign "$SIGN" "$APP"
 echo "Built $(pwd)/$APP"

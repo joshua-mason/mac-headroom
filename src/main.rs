@@ -34,6 +34,11 @@ struct Cli {
     /// With no command or with `scan`: write the report without opening it
     #[arg(long, global = true)]
     no_open: bool,
+    /// Never read folders macOS protects (Desktop, Documents, Downloads, Photos,
+    /// other apps' data, the Trash), so running without Full Disk Access raises
+    /// no privacy prompts. What was skipped is reported.
+    #[arg(long, global = true)]
+    skip_protected: bool,
 }
 
 #[derive(Subcommand)]
@@ -161,6 +166,7 @@ fn emit<T: Serialize>(value: &T) {
 fn main() {
     let cli = Cli::parse();
     schedule::extend_path();
+    util::set_skip_protected(cli.skip_protected);
     let Some(cmd) = cli.cmd else {
         scan(cli.json, cli.no_open);
         return;
@@ -392,6 +398,10 @@ struct Overview {
     /// item, an agent) can say what is freeable without an 80-second rescan.
     #[serde(skip_serializing_if = "Option::is_none")]
     findings: Option<findings::Findings>,
+    /// Checked now, by this process, so it reflects whatever launched it: an
+    /// app gets its own answer, a terminal gets the terminal's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full_disk_access: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -428,6 +438,7 @@ fn overview() -> Overview {
         .unwrap_or(0);
     Overview {
         findings: findings::load(),
+        full_disk_access: util::full_disk_access(),
         disk: diag::disk().map(|d| DiskNow {
             used: d.used,
             free: d.free,

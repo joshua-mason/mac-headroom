@@ -321,6 +321,13 @@ function daysUntilFull() {
 (() => {
   const F = D.findings;
   if (!F || F.full_disk_access !== false) return;
+  if (F.skipped_protected) {
+    $('status').insertAdjacentHTML('beforeend', `<div class="callout warn"><b>Some folders were deliberately left out</b>
+      This scan skipped the folders macOS asks permission for, so it would not interrupt you with a prompt for each one:
+      Desktop, Documents, Downloads, Photos, other apps' data and the Trash. Their size is missing from everything below.
+      To include them, give Full Disk Access to whatever runs mac-headroom, in <b>System Settings &gt; Privacy &amp; Security &gt; Full Disk Access</b>.</div>`);
+    return;
+  }
   const bin = D.schedule && D.schedule.binary;
   $('status').insertAdjacentHTML('beforeend', `<div class="callout warn"><b>Some folders were hidden from the scan, including your Trash</b>
     macOS privacy protection blocks this scan from reading them, so their size is missing from everything below. Your Trash alone can be very large.

@@ -55,11 +55,11 @@ public final class Store: ObservableObject {
         }
     }
 
-    func scan() async {
+    func scan(skipProtected: Bool = false) async {
         scanning = true
         defer { scanning = false }
         do {
-            _ = try await Headroom.run(["scan"])
+            _ = try await Headroom.run(skipProtected ? ["scan", "--skip-protected"] : ["scan"])
             cleaned = nil
             reportURL = nil
             await refresh()

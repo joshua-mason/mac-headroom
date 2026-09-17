@@ -70,6 +70,9 @@ struct Status: Decodable {
     let disk: Disk?
     let schedule: Schedule
     let findings: Findings?
+    /// Checked by the bundled CLI at the moment of asking, so it is this app's
+    /// own answer rather than a terminal's.
+    let fullDiskAccess: Bool?
 }
 
 struct Disk: Decodable {
@@ -90,6 +93,7 @@ struct Findings: Decodable {
     let reclaimable: [Estimate]
     let detections: [Detection]
     let fullDiskAccess: Bool?
+    let skippedProtected: Bool?
 }
 
 struct Estimate: Decodable, Identifiable {

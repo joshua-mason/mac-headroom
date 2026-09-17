@@ -10,6 +10,7 @@ let args = CommandLine.arguments
 let outPath = args.count > 1 ? args[1] : "menu.png"
 let dark = args.contains("--dark")
 let confirming = args.contains("--confirming")
+let asking = args.contains("--access")
 let sheet = args.contains("--sheet")
 let themeName = args.firstIndex(of: "--theme").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
 
@@ -62,7 +63,7 @@ func main() async throws {
         data = try await render(view, appearance: NSAppearance(named: .aqua))
     } else {
         let theme = Theme.candidates.first { $0.name.lowercased() == themeName?.lowercased() } ?? .system
-        let view = MenuView(startConfirming: confirming)
+        let view = MenuView(startConfirming: confirming, startAskingAccess: asking)
             .environmentObject(store)
             .environment(\.theme, theme)
             .background(theme.name == "System" ? Color(nsColor: .windowBackgroundColor) : .clear)
