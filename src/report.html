@@ -290,7 +290,7 @@ function daysUntilFull() {
     const gap = -(b.free - a.free) - (b.used - a.used);
     hidden = gap > 2 * GB
       ? `<div class="callout warn"><b>About ${h(gap)} is being held by macOS</b>Since ${day(a.at)}, free space fell by more than your files grew. That difference is not in any folder. It is usually temporary space macOS keeps for an update or a backup; restarting or installing a pending update normally releases it.</div>`
-      : `<div class="callout ok"><b>Nothing is hiding</b>The space your files use matches what the disk reports, so everything taking up room can be found in the sections below.</div>`;
+      : `<div class="callout ok"><b>No space is stuck</b>Your used and free space add up, so macOS is not holding space back for an update or a backup.</div>`;
   }
   const job = D.schedule && D.schedule.installed
     ? `<p class="quiet">The weekly check is on${D.schedule.schedule ? ` (${esc(D.schedule.schedule)})` : ''}.${D.schedule.last_run ? ' Last run ' + esc(D.schedule.last_run.split(' (')[0]) + '.' : ''}</p>` : '';
@@ -299,6 +299,17 @@ function daysUntilFull() {
     <p class="sub">That is ${pct.toFixed(0)}% of your ${h(d.total)} disk.${trend}</p>
     <div class="bar" title="${pct.toFixed(0)}% free"><div style="width:${(100 - pct).toFixed(1)}%"></div></div>
     ${hidden}${job}`;
+})();
+
+/* ---------- Folders macOS would not let the scan read ---------- */
+(() => {
+  const F = D.findings;
+  if (!F || F.full_disk_access !== false) return;
+  const bin = D.schedule && D.schedule.binary;
+  $('status').insertAdjacentHTML('beforeend', `<div class="callout warn"><b>Some folders were hidden from the scan, including your Trash</b>
+    macOS privacy protection blocks this scan from reading them, so their size is missing from everything below. Your Trash alone can be very large.
+    To include them: open <b>System Settings &gt; Privacy &amp; Security &gt; Full Disk Access</b>, turn on your terminal app, then quit and reopen it and run <code>mac-headroom</code> again.${bin
+      ? ` The weekly check runs without a terminal, so to include them there too, add <code>${esc(bin)}</code> to the same list with the + button.` : ''}</div>`);
 })();
 
 /* ---------- What changed (returning visitors only) ---------- */
@@ -576,10 +587,11 @@ renderLook();
       subtree(g, 1, '~ (your home folder)', 'The home folder, ' + g.depth + ' levels deep.');
       extra.forEach(r => subtree(r, 1, tilde(r.root), 'An extra scan root from your config.', true));
       if (reconcile) {
-        rows.push({ label: 'not scanned', v: d.used - covered, depth: 1, rest: true, unscanned: true,
-          tipText: extra.length
-            ? 'The rest of the data volume, outside every root that is scanned.'
-            : 'Everything outside your home folder: /Applications, /Library, /opt/homebrew, /private/var and the like.' });
+        const blocked = D.findings && D.findings.full_disk_access === false;
+        rows.push({ label: blocked ? 'not accounted for (includes your Trash)' : 'not accounted for', v: d.used - covered, depth: 1, rest: true, unscanned: true,
+          tipText: blocked
+            ? 'Space the scan could not reach. macOS blocked it from reading your Trash and other private folders, and the rest is filesystem overhead and files only macOS itself can read.'
+            : 'Space the scan could not reach: filesystem overhead and files only macOS itself can read.' });
       }
     }
     return rows;
@@ -619,13 +631,14 @@ renderLook();
     const hint = $('unscanned');
     if (un && un.v > 2 * GB) {
       hint.style.display = '';
-      hint.innerHTML = `<b>${h(un.v)} is outside every scanned root.</b> On most Macs the bulk of it is
-        <span class="mono">/private/var</span> (system logs, caches and databases, mostly unreadable without sudo),
-        <span class="mono">/usr/local</span>, other user accounts, and filesystem overhead that no directory walk sees.
-        Add a path to <span class="mono">scan_roots</span> in the config to break more of it down, or run
-        <span class="mono">sudo mac-headroom growth /private/var</span> for a one-off look. One place worth knowing about:
-        <span class="mono">/System/Library/AssetsV2</span> looks like part of the system but is firmlinked onto the data
-        volume, and holds downloaded OS assets such as simulator runtimes.`;
+      const blocked = D.findings && D.findings.full_disk_access === false;
+      hint.innerHTML = blocked
+        ? `<b>${h(un.v)} could not be accounted for, and part of it is folders the scan was not allowed to read, including your Trash.</b>
+          macOS privacy protection stops this scan reading your Trash, along with a few other private folders such as Mail.
+          To include them, open <b>System Settings &gt; Privacy &amp; Security &gt; Full Disk Access</b>, turn on your terminal app,
+          then quit and reopen the terminal and run <code>mac-headroom</code> again. The rest is filesystem overhead and files only macOS can read.`
+        : `<b>${h(un.v)} could not be accounted for.</b> Most of it is usually filesystem overhead and files only macOS itself can read,
+          such as parts of <code>/private/var</code>. None of it is anything you could safely clear by hand.`;
     } else {
       hint.style.display = 'none';
     }

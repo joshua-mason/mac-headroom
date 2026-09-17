@@ -3,6 +3,46 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Whether a path lives on the volume that holds user data.
+///
+/// Only locations there belong in the breakdown under "Your data". Several
+/// paths that look like part of the system are really firmlinked onto it
+/// (`/System/Library/AssetsV2` holds gigabytes of downloaded OS assets), and
+/// anything on another volume would be counted against the wrong total.
+pub fn on_data_volume(p: &Path) -> bool {
+    match (
+        std::fs::metadata(p),
+        std::fs::metadata("/System/Volumes/Data"),
+    ) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev(),
+        _ => false,
+    }
+}
+
+/// Whether this process can read folders macOS keeps behind Full Disk Access.
+///
+/// Without it the Trash, Mail and Safari data are unreadable, so a scan quietly
+/// misses what is often the single largest thing on the disk. None means there
+/// was nothing to test against.
+pub fn full_disk_access() -> Option<bool> {
+    let h = home();
+    for probe in [
+        h.join(".Trash"),
+        h.join("Library/Safari"),
+        h.join("Library/Mail"),
+    ] {
+        if std::fs::symlink_metadata(&probe).is_err() {
+            continue;
+        }
+        return match std::fs::read_dir(&probe) {
+            Ok(_) => Some(true),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(false),
+            Err(_) => continue,
+        };
+    }
+    None
+}
+
 pub fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").expect("HOME is not set"))
 }

@@ -645,6 +645,14 @@ fn scan(json: bool, no_open: bool) {
                 println!("  {:>9}  {}", human(d.bytes), d.title);
             }
         }
+        if found.full_disk_access == Some(false) {
+            println!(
+                "\nmacOS is hiding some folders from this scan, including your Trash, so part"
+            );
+            println!("of your disk cannot be explained. To include them, open System Settings >");
+            println!("Privacy & Security > Full Disk Access, turn on your terminal app, then quit");
+            println!("the terminal, reopen it and run mac-headroom again.");
+        }
         println!(
             "\nThe full picture, with what each of these is: {}",
             path.display()

@@ -22,6 +22,10 @@ pub struct Findings {
     pub at: u64,
     pub reclaimable: Vec<cleaners::Estimate>,
     pub detections: Vec<Detection>,
+    /// False when macOS privacy protection hid folders such as the Trash from
+    /// the scan, which can leave a very large amount unexplained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_disk_access: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -248,5 +252,6 @@ pub fn gather() -> Findings {
         at: now(),
         reclaimable,
         detections: detections(),
+        full_disk_access: crate::util::full_disk_access(),
     }
 }
