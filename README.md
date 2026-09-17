@@ -194,7 +194,7 @@ tells the agent the order of operations and the deletion rules.
 ## Install
 
 ```
-cargo install --git https://github.com/joshua-mason/mac-headroom --tag v0.2.0
+cargo install mac-headroom
 ```
 
 Or from a clone, `cargo install --path .`. Either way the binary lands in
