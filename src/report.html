@@ -541,11 +541,12 @@ $('meta').textContent = `${D.host} · ${when(D.generated_at)} · v${D.version}`;
     return;
   }
   const total = A.reduce((s, a) => s + (a.bytes || 0), 0);
+  const unmeasured = A.filter(a => a.bytes == null).length;
   el.innerHTML = `<h2>Deletions</h2>
-    <p class="cap" style="margin:0 0 18px">Last ${A.length}, ${h(total)} in total. Every deletion is recorded, so a missing file can be traced back or ruled out.</p>
+    <p class="cap" style="margin:0 0 18px">Last ${A.length}, ${h(total)} measured in total${unmeasured ? `, plus ${unmeasured} runs of a tool's own clean command that were not measured (shown as —)` : ''}. Every deletion is recorded, so a missing file can be traced back or ruled out.</p>
     <div class="scroll"><table>
       <tr><th>When</th><th>Cleaner</th><th>Result</th><th class="r">Size</th><th>Path or command</th></tr>
-      ${A.map(a => `<tr><td style="white-space:nowrap">${when(a.at)}</td><td class="mono">${esc(a.cleaner)}</td><td>${esc(a.result)}</td><td class="r">${a.bytes ? h(a.bytes) : ''}</td><td class="mono">${esc(tilde(a.path))}</td></tr>`).join('')}
+      ${A.map(a => `<tr><td style="white-space:nowrap">${when(a.at)}</td><td class="mono">${esc(a.cleaner)}</td><td>${esc(a.result)}</td><td class="r">${a.bytes == null ? '<span class="muted" title="Not measured">—</span>' : h(a.bytes)}</td><td class="mono">${esc(tilde(a.path))}${a.detail ? `<div class="muted" style="font-family:inherit;margin-top:2px">${esc(a.detail)}</div>` : ''}</td></tr>`).join('')}
     </table></div>`;
 })();
 

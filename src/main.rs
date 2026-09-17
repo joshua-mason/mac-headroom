@@ -437,7 +437,8 @@ pub struct CleanReport {
     free_before: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     free_after: Option<u64>,
-    /// Sum over path cleaners only. Command cleaners are not sized.
+    /// Sum of what was freed, or would be. Command cleaners count only once
+    /// they have run and been measured.
     pub bytes: u64,
     cleaners: Vec<cleaners::Outcome>,
 }
@@ -493,7 +494,7 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
         match (report.free_before, report.free_after) {
             (Some(b), Some(a)) => println!("Done. Free space {} -> {}", human(b), human(a)),
             _ if !apply => println!(
-                "Would reclaim at least {} from path cleaners. Command cleaners are not sized in a dry run.",
+                "Would reclaim at least {} from files. Command cleaners show their cache size above; what they free is measured when they run.",
                 human(report.bytes)
             ),
             _ => println!("Done."),
@@ -513,6 +514,9 @@ fn audit(r: &CleanReport) {
         return;
     };
     let ts = now();
+    // Columns: time, cleaner, result, bytes, path or command, detail.
+    // Bytes is "-" when nothing measured it, so an unknown is never shown as 0.
+    let clean = |t: &str| t.replace(['\t', '\n'], " ");
     for o in &r.cleaners {
         for t in &o.targets {
             // A target a filter kept was never touched. Recording it as a
@@ -520,10 +524,13 @@ fn audit(r: &CleanReport) {
             if t.kept.is_some() {
                 continue;
             }
-            let result = t.error.as_deref().unwrap_or("deleted");
+            let (result, detail) = match &t.error {
+                Some(e) => ("failed", clean(e)),
+                None => ("deleted", String::new()),
+            };
             let _ = writeln!(
                 f,
-                "{ts}\t{}\t{result}\t{}\t{}",
+                "{ts}\t{}\t{result}\t{}\t{}\t{detail}",
                 o.name,
                 t.bytes,
                 t.path.display()
@@ -531,9 +538,15 @@ fn audit(r: &CleanReport) {
         }
         if let Some(cmd) = &o.command {
             let status = serde_json::to_string(&o.status).unwrap_or_default();
+            let bytes = if o.measured {
+                o.bytes.to_string()
+            } else {
+                "-".to_string()
+            };
+            let detail = o.reason.as_deref().map(clean).unwrap_or_default();
             let _ = writeln!(
                 f,
-                "{ts}\t{}\t{}\t0\t{cmd}",
+                "{ts}\t{}\t{}\t{bytes}\t{cmd}\t{detail}",
                 o.name,
                 status.trim_matches('"')
             );

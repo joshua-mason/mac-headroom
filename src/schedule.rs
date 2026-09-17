@@ -6,7 +6,7 @@
 use crate::util::{home, human, stdout_of};
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const LABEL: &str = "com.mac-headroom.schedule";
@@ -139,6 +139,9 @@ fn xml_unescape(s: &str) -> String {
 }
 
 fn plist(exe: &str, weekday: u8, hour: u8, minute: u8, only: &[String], growth: bool) -> String {
+    // The job runs with the PATH of whoever installed it, which is the one their
+    // tools are known to work under. launchd would otherwise give it almost none.
+    let path_xml = xml_escape(&std::env::var("PATH").unwrap_or_default());
     let mut args = vec![exe.to_string(), "schedule".into(), "run".into()];
     if !growth {
         args.push("--no-growth".into());
@@ -170,6 +173,11 @@ fn plist(exe: &str, weekday: u8, hour: u8, minute: u8, only: &[String], growth: 
     <integer>{hour}</integer>
     <key>Minute</key>
     <integer>{minute}</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{path_xml}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>{log}</string>
@@ -514,29 +522,65 @@ pub fn print_status(s: &Status) {
     }
 }
 
-/// launchd does not load the shell profile, so command cleaners (npm, brew, go...)
-/// would be silently skipped as "not installed". Add the usual places.
-fn extend_path() {
-    let h = home();
-    let mut extra: Vec<PathBuf> = vec![
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-        h.join(".local/bin"),
-        h.join(".cargo/bin"),
-        h.join("go/bin"),
-    ];
-    // Newest nvm node, if any.
-    if let Ok(rd) = fs::read_dir(h.join(".nvm/versions/node")) {
-        if let Some(newest) = rd.flatten().map(|e| e.path()).max() {
-            extra.push(newest.join("bin"));
+/// Directories that commonly hold developer tools, in the order a user who has
+/// several copies of a tool most likely meant. nvm comes before Homebrew because
+/// someone who installed nvm chose it over whatever node Homebrew might also have.
+fn fallback_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(node) = newest_node(&home.join(".nvm/versions/node")) {
+        dirs.push(node.join("bin"));
+    }
+    dirs.push(home.join(".local/bin"));
+    dirs.push(home.join(".cargo/bin"));
+    dirs.push(home.join("go/bin"));
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs
+}
+
+/// The highest installed node version by number. Picking by name sorts v8 above
+/// v22, which is exactly the version nobody wants.
+fn newest_node(dir: &Path) -> Option<PathBuf> {
+    fn version(p: &Path) -> Option<(u64, u64, u64)> {
+        let name = p.file_name()?.to_str()?.trim_start_matches('v');
+        let mut it = name.split('.').map(|n| n.parse::<u64>().ok());
+        Some((
+            it.next()??,
+            it.next().flatten().unwrap_or(0),
+            it.next().flatten().unwrap_or(0),
+        ))
+    }
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|p| version(&p).map(|v| (v, p)))
+        .max_by_key(|(v, _)| *v)
+        .map(|(_, p)| p)
+}
+
+/// Add fallbacks to the end of a PATH, skipping any already present.
+///
+/// They go after, never before. Putting them first overrode the user's own
+/// order: with Homebrew ahead of nvm, `npm` ran under Homebrew's node, which on
+/// the machine this was found on could not even load, so npm and pnpm failed on
+/// every scheduled run while working perfectly in a terminal.
+fn merged_path(current: &std::ffi::OsStr, fallbacks: Vec<PathBuf>) -> std::ffi::OsString {
+    let mut all: Vec<PathBuf> = std::env::split_paths(current).collect();
+    for d in fallbacks {
+        if !all.contains(&d) {
+            all.push(d);
         }
     }
+    std::env::join_paths(all).unwrap_or_else(|_| current.to_os_string())
+}
+
+/// launchd starts jobs with a bare PATH, so command cleaners would report their
+/// tools as not installed. The job carries the PATH it was installed with; this
+/// only fills gaps behind it.
+fn extend_path() {
     let current = std::env::var_os("PATH").unwrap_or_default();
-    let mut all = extra;
-    all.extend(std::env::split_paths(&current));
-    if let Ok(joined) = std::env::join_paths(all) {
-        std::env::set_var("PATH", joined);
-    }
+    std::env::set_var("PATH", merged_path(&current, fallback_dirs(&home())));
 }
 
 fn stamp() -> String {
@@ -628,6 +672,41 @@ mod tests {
             "the stable name, not the Cellar path"
         );
         assert!(!found.components().any(|c| c.as_os_str() == "Cellar"));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn fallbacks_go_after_the_users_own_path() {
+        let current = std::ffi::OsString::from("/Users/x/.nvm/versions/node/v22/bin:/usr/bin");
+        let merged = merged_path(
+            &current,
+            vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/bin"),
+            ],
+        );
+        let dirs: Vec<PathBuf> = std::env::split_paths(&merged).collect();
+        assert_eq!(
+            dirs[0],
+            PathBuf::from("/Users/x/.nvm/versions/node/v22/bin")
+        );
+        assert_eq!(dirs.last().unwrap(), &PathBuf::from("/opt/homebrew/bin"));
+        assert_eq!(
+            dirs.iter()
+                .filter(|d| d.as_path() == Path::new("/usr/bin"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn newest_node_is_chosen_by_number_not_name() {
+        let root = std::env::temp_dir().join(format!("mh-node-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&root);
+        for v in ["v8.17.0", "v22.22.0", "v20.1.0"] {
+            fs::create_dir_all(root.join(v)).unwrap();
+        }
+        assert_eq!(newest_node(&root).unwrap(), root.join("v22.22.0"));
         fs::remove_dir_all(&root).unwrap();
     }
 
