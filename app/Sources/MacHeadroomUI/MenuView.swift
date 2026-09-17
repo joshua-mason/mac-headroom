@@ -17,7 +17,14 @@ public struct MenuLabel: View {
 public struct MenuView: View {
     @EnvironmentObject var store: Store
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.theme) private var theme
+    /// A theme injected by the snapshot tool wins; otherwise the one picked in
+    /// the menu, remembered between launches. Never the see-through system
+    /// look: over the menu's frosted material its greys looked muddy.
+    @Environment(\.theme) private var injected
+    @AppStorage("theme") private var chosen = Theme.clean.name
+    private var theme: Theme {
+        injected.name != Theme.system.name ? injected : (Theme.named(chosen) ?? .clean)
+    }
     @State private var confirming: Bool
 
     public init(startConfirming: Bool = false) {
@@ -45,6 +52,7 @@ public struct MenuView: View {
         .frame(width: 360)
         .foregroundStyle(theme.text)
         .background(theme.background)
+        .environment(\.theme, theme)
         .environment(\.colorScheme, theme.scheme)
     }
 
@@ -195,6 +203,27 @@ public struct MenuView: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             Spacer()
+            // Temporary, while a look is being chosen: try each one in the real menu.
+            Menu {
+                ForEach(Theme.candidates) { t in
+                    Button {
+                        chosen = t.name
+                    } label: {
+                        if t.name == theme.name {
+                            Label(t.name, systemImage: "checkmark")
+                        } else {
+                            Text(t.name)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "paintpalette")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .foregroundStyle(theme.secondary)
+            .help("Try another look")
             FooterButton(title: "Quit", systemImage: "power") { NSApp.terminate(nil) }
         }
     }

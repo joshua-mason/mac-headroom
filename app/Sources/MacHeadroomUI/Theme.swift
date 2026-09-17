@@ -99,6 +99,10 @@ public extension Theme {
         quietButton: Color(hex: 0x2A2F39), hover: Color(hex: 0x262B34))
 
     static let candidates: [Theme] = [.clean, .paper, .mint, .platinum, .midnight]
+
+    static func named(_ name: String) -> Theme? {
+        candidates.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
 }
 
 private struct ThemeKey: EnvironmentKey {
