@@ -168,9 +168,8 @@ code,.cmd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5
 .change .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
 .change .v{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
 .change .n{color:var(--ink2);font-size:13px}
-.sizebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0 0;font-size:13px;color:var(--ink2)}
-.sizebar .seg{margin:0}
-.hiddennote{color:var(--muted);font-size:13px;margin:10px 0 0}
+.treecontrols{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.treecontrols .seg{margin-bottom:14px}
 /* history */
 .filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
 .filters select,.filters input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--axis);border-radius:5px;background:var(--page);color:var(--ink)}
@@ -199,15 +198,6 @@ code,.cmd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5
   <button role="tab" data-panel="explore" aria-controls="p-explore" aria-selected="false">Explore</button>
   <button role="tab" data-panel="history" aria-controls="p-history" aria-selected="false">History<span class="n" id="nRuns"></span></button>
 </nav>
-<div class="sizebar" id="sizebar">
-  <span>Show items of</span>
-  <div class="seg" role="group" aria-label="Minimum size shown">
-    <button data-min="0" aria-pressed="true">Any size</button>
-    <button data-min="1">1 GB+</button>
-    <button data-min="2">2 GB+</button>
-    <button data-min="5">5 GB+</button>
-  </div>
-</div>
 <div class="panel" id="p-overview" role="tabpanel" aria-labelledby="tabs">
   <section id="status"></section>
   <section id="changed" hidden></section>
@@ -263,18 +253,6 @@ document.addEventListener('click', e => {
   ta.remove();
 });
 const DAY = 86400;
-/* One size threshold for the whole page, for when only the big picture matters.
-   Totals stay true; only the lists are shortened, and each says what it hid. */
-let MIN = 0;
-try { MIN = Math.max(0, +localStorage.getItem('mh-min') || 0); } catch (e) { MIN = 0; }
-const setMin = gb => {
-  MIN = gb * GB;
-  try { localStorage.setItem('mh-min', String(gb)); } catch (e) { /* not important */ }
-  document.querySelectorAll('#sizebar [data-min]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.min * GB === MIN)));
-  document.dispatchEvent(new CustomEvent('minsize'));
-};
-const hiddenNote = (items, noun) => items.length
-  ? `<p class="hiddennote">${items.length} smaller ${noun}${items.length > 1 ? 's' : ''} hidden, ${h(items.reduce((s, x) => s + (x.bytes || 0), 0))} in total.</p>` : '';
 const H = D.history || [];
 const returning = H.length >= 2 && (H[H.length - 1].at - H[0].at) >= DAY / 2;
 
@@ -360,44 +338,38 @@ function renderFreeable() {
     return;
   }
   const items = F.reclaimable.filter(e => (e.bytes || 0) >= 1024 * 1024).sort((a, b) => b.bytes - a.bytes);
-  const shown = items.filter(e => e.bytes >= MIN), hidden = items.filter(e => e.bytes < MIN);
   const empty = F.reclaimable.filter(e => !((e.bytes || 0) >= 1024 * 1024) && !e.note);
   const total = items.reduce((s, e) => s + e.bytes, 0);
   const blocked = [...new Set(items.filter(e => e.blocked_by).map(e => e.blocked_by))];
   const stale = D.generated_at - F.at > 2 * DAY ? ` <span class="muted">(measured ${day(F.at)})</span>` : '';
   el.innerHTML = `<p class="lead">${items.length ? `You can safely free about ${h(total)}` : 'Nothing obvious to clear right now'}${stale}</p>
     <p class="sub">These are copies and leftovers that apps and tools recreate or no longer need. None of it is your documents, photos or projects.</p>
-    ${shown.length ? `<div class="items">${shown.map(e => `
+    ${items.length ? `<div class="items">${items.map(e => `
       <div class="item">
         <div class="size">${e.upper_bound ? '<small>up to</small>' : ''}${h(e.bytes)}</div>
         <div><span class="title">${esc(e.title)}</span>${e.blocked_by ? `<span class="chip warn">Quit ${esc(e.blocked_by)} first</span>` : ''}<p>${esc(e.plain)}</p></div>
       </div>`).join('')}</div>` : ''}
-    ${hiddenNote(hidden, 'item')}
-    ${items.length ? `<div class="cmdbox"><span class="cmd">mac-headroom clean --yes</span>${copyBtn('mac-headroom clean --yes')}<span class="quiet" style="margin:0">Removes all of it, including anything hidden by the size filter.${blocked.length ? ` Quit ${blocked.map(esc).join(' and ')} first, or those are skipped.` : ''}</span></div>
+    ${items.length ? `<div class="cmdbox"><span class="cmd">mac-headroom clean --yes</span>${copyBtn('mac-headroom clean --yes')}<span class="quiet" style="margin:0">Removes all of the above.${blocked.length ? ` Quit ${blocked.map(esc).join(' and ')} first, or those are skipped.` : ''}</span></div>
     <p class="quiet">Want to see every file first? <code>mac-headroom clean</code> lists exactly what would go, without removing anything.</p>` : ''}
-    ${empty.length && !MIN ? `<p class="quiet">Already clean: ${empty.map(e => esc(e.title)).join(', ')}.</p>` : ''}`;
+    ${empty.length ? `<p class="quiet">Already clean: ${empty.map(e => esc(e.title)).join(', ')}.</p>` : ''}`;
 }
 renderFreeable();
-document.addEventListener('minsize', renderFreeable);
 
 /* ---------- Worth a look ---------- */
 function renderLook() {
   const el = $('look'), F = D.findings;
   if (!F || !F.detections.length) { el.hidden = true; return; }
-  const shown = F.detections.filter(x => x.bytes >= MIN), hidden = F.detections.filter(x => x.bytes < MIN);
   el.innerHTML = `<p class="lead">Worth a look, your call</p>
     <p class="sub">Large things that are often a surprise, especially after installing developer tools. Some of it you may well want to keep, so nothing here is removed automatically.</p>
-    ${shown.map(x => `<div class="card">
+    ${F.detections.map(x => `<div class="card">
       <div class="top"><span class="title">${esc(x.title)}</span><span class="size">${h(x.bytes)}</span></div>
       <p>${rich(x.what)}</p>
       <p class="how">${rich(x.how)}</p>
       ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
       ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
-    </div>`).join('')}
-    ${hiddenNote(hidden, 'thing')}`;
+    </div>`).join('')}`;
 }
 renderLook();
-document.addEventListener('minsize', renderLook);
 
 /* ---------- Worth a look ---------- */
 (() => {
@@ -542,6 +514,10 @@ document.addEventListener('minsize', renderLook);
   const skipped = scans.reduce((s, r) => s + (r.skipped || 0), 0);
   const leaf = p => { const t = tilde(p); return t.split('/').filter(Boolean).pop() || t; };
   let mode = 'size';
+  /* Hide rows below a size, for when only the big picture matters. Totals stay
+     true; the tree just skips detail. Remembered between visits. */
+  let MIN = 0;
+  try { MIN = Math.max(0, +localStorage.getItem('mh-tree-min') || 0) * GB; } catch (e) { MIN = 0; }
 
   /* Nest one scan's entries by path. */
   function nest(scan) {
@@ -684,9 +660,14 @@ document.addEventListener('minsize', renderLook);
   }
 
   el.innerHTML = `<h2>Where the space is</h2>
+    <div class="treecontrols">
     <div class="seg">
       <button id="mSize" aria-pressed="true">Size</button>
       <button id="mChange" aria-pressed="false" ${canChange ? '' : 'disabled title="Needs a second scan to compare against"'}>Change</button>
+    </div>
+    <div class="seg" role="group" aria-label="Smallest folder shown" id="mMin">
+      ${[0, 1, 2, 5].map(g => `<button data-min="${g}" aria-pressed="${g * GB === MIN}">${g ? g + ' GB+' : 'Any size'}</button>`).join('')}
+    </div>
     </div>
     <p class="cap" id="caption" style="margin:0 0 14px"></p>
     <div class="keys" id="key" style="margin-bottom:12px;display:none"><span><i class="sw" style="background:var(--grow)"></i>grew</span><span><i class="sw" style="background:var(--shrink)"></i>shrank</span></div>
@@ -697,8 +678,15 @@ document.addEventListener('minsize', renderLook);
   const set = m => { mode = m; $('mSize').setAttribute('aria-pressed', m === 'size'); $('mChange').setAttribute('aria-pressed', m === 'change'); draw(); };
   $('mSize').onclick = () => set('size');
   $('mChange').onclick = () => { if (canChange) set('change'); };
+  $('mMin').querySelectorAll('[data-min]').forEach(b => {
+    b.onclick = () => {
+      MIN = +b.dataset.min * GB;
+      try { localStorage.setItem('mh-tree-min', b.dataset.min); } catch (e) { /* not important */ }
+      $('mMin').querySelectorAll('[data-min]').forEach(o => o.setAttribute('aria-pressed', String(o === b)));
+      draw();
+    };
+  });
   draw();
-  document.addEventListener('minsize', draw);
 })();
 
 /* ---------- Weekly check health ---------- */
@@ -789,7 +777,6 @@ document.addEventListener('minsize', renderLook);
       t.tabIndex = on ? 0 : -1;
       $('p-' + t.dataset.panel).hidden = !on;
     });
-    $('sizebar').hidden = name === 'history';
     try { localStorage.setItem('mh-tab', name); } catch (e) { /* not important */ }
     if (location.hash.slice(1) !== name) {
       try { history.replaceState(null, '', '#' + name); } catch (e) { /* file:// */ }
@@ -797,7 +784,6 @@ document.addEventListener('minsize', renderLook);
     hideTip();
   };
   tabs.forEach(t => { t.onclick = () => show(t.dataset.panel); });
-  document.querySelectorAll('#sizebar [data-min]').forEach(b => { b.onclick = () => setMin(+b.dataset.min); });
   $('tabs').addEventListener('keydown', e => {
     const i = tabs.indexOf(document.activeElement);
     if (i < 0) return;
@@ -813,7 +799,6 @@ document.addEventListener('minsize', renderLook);
   /* Always land on the overview: it is the answer. A link can still open another tab. */
   const start = location.hash.slice(1);
   show(names.includes(start) ? start : 'overview');
-  if (MIN) setMin(MIN / GB);
   addEventListener('hashchange', () => {
     const n = location.hash.slice(1);
     if (names.includes(n)) show(n);
