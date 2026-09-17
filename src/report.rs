@@ -158,45 +158,64 @@ fn hostname() -> String {
     }
 }
 
+/// With MAC_HEADROOM_TRACE set, time a step and say so on stderr.
+fn timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
+    let trace = std::env::var_os("MAC_HEADROOM_TRACE").is_some();
+    let start = std::time::Instant::now();
+    let out = f();
+    if trace {
+        eprintln!("trace: {:>6} ms  {label}", start.elapsed().as_millis());
+    }
+    out
+}
+
 pub fn gather() -> Data {
-    let cleaners = crate::config::all_cleaners().unwrap_or_default();
-    let snapshots = crate::diag::snapshots();
+    let cleaners = timed("cleaners", || {
+        crate::config::all_cleaners().unwrap_or_default()
+    });
+    let snapshots = timed("snapshots", crate::diag::snapshots);
     let update_snapshot_pinned = snapshots.iter().any(|n| n.contains("com.apple.os.update"));
     Data {
         generated_at: now(),
-        host: hostname(),
+        host: timed("hostname", hostname),
         version: env!("CARGO_PKG_VERSION"),
         repository: crate::suggest::REPOSITORY,
         home: home().to_string_lossy().into_owned(),
-        disk: crate::diag::disk().map(|d| DiskNow {
-            used: d.used,
-            free: d.free,
-            total: d.total,
-            other: d.total.saturating_sub(d.used + d.free),
+        disk: timed("disk", || {
+            crate::diag::disk().map(|d| DiskNow {
+                used: d.used,
+                free: d.free,
+                total: d.total,
+                other: d.total.saturating_sub(d.used + d.free),
+            })
         }),
         snapshots,
-        volumes: crate::volumes::gather(),
+        volumes: timed("volumes", crate::volumes::gather),
         update_snapshot_pinned,
-        history: history(),
+        history: timed("history", history),
         // More entries than the terminal shows: the page nests them into a
         // tree, so it needs the parents as well as the leaves.
         // Ranked by size, not by change: the page renders the size view and
         // the change view from the same list, and a change-ranked list would
         // silently drop everything that did not move.
-        growth: crate::growth::from_saved(&home(), 3, 100 << 20, 80, crate::growth::Rank::Size),
-        growth_roots: crate::config::scan_roots()
-            .iter()
-            .filter_map(|r| {
-                crate::growth::from_saved(r, 3, 100 << 20, 40, crate::growth::Rank::Size)
-            })
-            .collect(),
-        config: crate::config::check(),
+        growth: timed("growth home", || {
+            crate::growth::from_saved(&home(), 3, 100 << 20, 80, crate::growth::Rank::Size)
+        }),
+        growth_roots: timed("growth other roots", || {
+            crate::config::scan_roots()
+                .iter()
+                .filter_map(|r| {
+                    crate::growth::from_saved(r, 3, 100 << 20, 40, crate::growth::Rank::Size)
+                })
+                .collect()
+        }),
+        config: timed("config check", crate::config::check),
         cleaners,
-        schedule: crate::schedule::status(),
-        audit: audit(500),
-        last_run_log: last_run_log(),
-        findings: crate::findings::load(),
-        runs: runs(),
+        schedule: timed("schedule status", crate::schedule::status),
+        audit: timed("audit", || audit(500)),
+        last_run_log: timed("last run log", last_run_log),
+        findings: timed("findings", crate::findings::load),
+        runs: timed("runs", runs),
     }
 }
 

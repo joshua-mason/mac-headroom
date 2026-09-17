@@ -451,7 +451,7 @@ renderLook();
       <div class="nm" style="padding-left:0"><span class="lbl">${esc(x.name)}${x.is_data ? '<span class="tag">scanned</span>' : ''}</span></div>
       <div class="track"><div class="bar" style="left:0;width:${100 * x.bytes / max}%;${x.is_data ? '' : 'opacity:.45'}"></div></div>
       <div class="amt">${h(x.bytes)}</div></div>`).join('');
-  const imgRows = imgs.map(i => `<tr><td class="r">${h(i.backing_bytes)}</td><td class="mono">${esc(tilde(i.backing_path))}</td></tr>`).join('');
+  const imgRows = imgs.map(i => `<tr><td class="r">${i.backing_bytes == null ? '<span class="muted" title="Not read: it is in a protected folder">—</span>' : h(i.backing_bytes)}</td><td class="mono">${esc(tilde(i.backing_path))}</td></tr>`).join('');
   el.innerHTML = `<h2>What System Data is made of</h2>
     <p class="cap" style="margin:0 0 16px">Your disk is divided into parts that share the same free space. Only one of them holds your files. The rest belong to macOS: <b>VM</b> is memory swapped to disk, <b>Preboot</b> and <b>Recovery</b> are what your Mac uses to start up and repair itself. Together they account for <b>${h(hidden)}</b>, and none of it shows up in Finder.</p>
     <div class="tree">${rows}</div>

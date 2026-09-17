@@ -102,6 +102,20 @@ const PROTECTED: &[&str] = &[
     "Library/Application Support/Knowledge",
 ];
 
+/// Whether a path is inside a protected folder while those are being skipped.
+/// Unlike `skip_protected`, which only matches the folder itself so a walk can
+/// prune it, this covers anything beneath one, for code that touches a single
+/// known file.
+pub fn inside_protected(path: &Path) -> bool {
+    if !skipping_protected() {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(home()) else {
+        return false;
+    };
+    PROTECTED.iter().any(|p| rel.starts_with(p))
+}
+
 /// Whether a path should be left alone because protected folders are being skipped.
 pub fn skip_protected(path: &Path) -> bool {
     if !skipping_protected() {

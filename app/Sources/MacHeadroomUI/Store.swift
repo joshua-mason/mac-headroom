@@ -10,6 +10,9 @@ public final class Store: ObservableObject {
     /// Set after a clean, until the next scan: the saved sizes are out of date.
     @Published var cleaned: CleanResult?
     @Published var reportURL: URL?
+    /// Changes whenever the report file is rewritten, so the window reloads it.
+    @Published var reportVersion = 0
+    private var reportTask: Task<Void, Never>?
     /// Which stage a scan is on: 0 checking the disk, 1 measuring folders,
     /// 2 working out what is safe to clear.
     @Published var scanStep: Int?
@@ -22,7 +25,10 @@ public final class Store: ObservableObject {
 
     public init(autoRefresh: Bool = true) {
         guard autoRefresh else { return }
-        Task { await refresh() }
+        Task {
+            await refresh()
+            await makeReport()
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
@@ -81,8 +87,8 @@ public final class Store: ObservableObject {
                 }
             }
             cleaned = nil
-            reportURL = nil
             await refresh()
+            prepareReport()
         } catch {
             self.error = error.localizedDescription
         }
@@ -113,17 +119,39 @@ public final class Store: ObservableObject {
         do {
             cleaned = try Headroom.decode(CleanResult.self, from: try await Headroom.run(["clean", "--yes"]))
             await refresh()
+            prepareReport()
         } catch {
             self.error = error.localizedDescription
         }
     }
 
+    /// Write a fresh report. Without Full Disk Access the CLI is told to leave
+    /// protected folders alone, since touching one would make macOS stop and
+    /// ask, holding the report up until someone answers. Overlapping requests
+    /// share one run.
     func makeReport() async {
-        do {
-            let file = try Headroom.decode(ReportFile.self, from: try await Headroom.run(["report"]))
-            reportURL = URL(fileURLWithPath: file.path)
-        } catch {
-            self.error = error.localizedDescription
+        if let running = reportTask {
+            await running.value
+            return
         }
+        let skip = status?.fullDiskAccess != true
+        let task = Task { @MainActor in
+            do {
+                let file = try Headroom.decode(ReportFile.self,
+                                               from: try await Headroom.run(skip ? ["report", "--skip-protected"] : ["report"]))
+                self.reportURL = URL(fileURLWithPath: file.path)
+                self.reportVersion += 1
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+        reportTask = task
+        await task.value
+        reportTask = nil
+    }
+
+    /// Keep a report ready, so opening the window shows one straight away.
+    func prepareReport() {
+        Task { await makeReport() }
     }
 }

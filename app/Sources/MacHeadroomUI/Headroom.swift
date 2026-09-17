@@ -28,6 +28,10 @@ enum Headroom {
                 let process = Process()
                 process.executableURL = executable
                 process.arguments = ["--json", "--no-open"] + args
+                var environment = ProcessInfo.processInfo.environment
+                environment["MAC_HEADROOM_TRACE"] = "1"
+                process.environment = environment
+                let started = Date()
                 let out = Pipe(), err = Pipe()
                 process.standardOutput = out
                 process.standardError = err
@@ -62,6 +66,8 @@ enum Headroom {
                 }
                 group.wait()
                 process.waitUntilExit()
+                log(args: args, seconds: Date().timeIntervalSince(started),
+                    status: process.terminationStatus, stderr: stderr)
                 if process.terminationStatus == 0 {
                     continuation.resume(returning: stdout)
                 } else {
@@ -74,6 +80,27 @@ enum Headroom {
                         message: text.isEmpty ? "mac-headroom exited with status \(process.terminationStatus)" : text))
                 }
             }
+        }
+    }
+
+    /// One line per command, plus any timing lines, in
+    /// ~/Library/Logs/mac-headroom-app.log, so slowness can be measured rather
+    /// than guessed at.
+    private static func log(args: [String], seconds: TimeInterval, status: Int32, stderr: Data) {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/mac-headroom-app.log")
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        var text = "\(stamp)  \(args.joined(separator: " "))  \(String(format: "%.2f", seconds))s  exit \(status)\n"
+        for line in String(decoding: stderr, as: UTF8.self).split(separator: "\n") where line.hasPrefix("trace: ") {
+            text += "    \(line.dropFirst("trace: ".count))\n"
+        }
+        guard let data = text.data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url)
         }
     }
 
