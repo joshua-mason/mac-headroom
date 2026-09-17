@@ -25,9 +25,11 @@ pub struct OrphanSpec {
     pub media_dir: &'static str,
     /// SQLite database, relative to `app_dir`.
     pub db: &'static str,
-    /// Queries returning one path per row. Every column that can reference a
-    /// file must be listed, or files still in use would look orphaned.
-    pub queries: &'static [&'static str],
+    /// Columns holding paths are discovered from the schema rather than listed,
+    /// so a column added by a later version of the app is picked up instead of
+    /// making everything it references look orphaned. A column counts if its
+    /// name contains this.
+    pub path_column_marker: &'static str,
     /// Subdirectory names inside the media directory to leave alone.
     pub skip_dirs: &'static [&'static str],
     /// A query that must return a non-zero count. It proves the database was
@@ -105,9 +107,34 @@ pub fn find(spec: &OrphanSpec) -> Result<Vec<PathBuf>, String> {
         if sane == 0 {
             return Err("the database read back empty, so nothing is safe to call orphaned".into());
         }
+        // Ask the schema which columns can hold a path. Assuming a fixed list
+        // would mean a column added by a future release is silently ignored,
+        // and every file it references would be called an orphan.
+        let tables = sqlite(
+            &staged,
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let mut columns: Vec<(String, String)> = Vec::new();
+        for table in &tables {
+            for row in sqlite(&staged, &format!("PRAGMA table_info(\"{table}\")"))? {
+                if let Some(col) = row.split('|').nth(1) {
+                    if col.to_ascii_uppercase().contains(spec.path_column_marker) {
+                        columns.push((table.clone(), col.to_string()));
+                    }
+                }
+            }
+        }
+        if columns.is_empty() {
+            return Err(format!(
+                "no column in {} looks like it holds a path, so the schema is not what was expected",
+                spec.db
+            ));
+        }
+
         let mut refs: HashSet<String> = HashSet::new();
-        for q in spec.queries {
-            for row in sqlite(&staged, q)? {
+        for (table, col) in &columns {
+            let q = format!("SELECT \"{col}\" FROM \"{table}\" WHERE \"{col}\" IS NOT NULL");
+            for row in sqlite(&staged, &q)? {
                 let p = row.trim();
                 if p.is_empty() {
                     continue;
@@ -170,13 +197,7 @@ pub const WHATSAPP: OrphanSpec = OrphanSpec {
     app_dir: "~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared",
     media_dir: "Message/Media",
     db: "ChatStorage.sqlite",
-    queries: &[
-        "SELECT ZMEDIALOCALPATH FROM ZWAMEDIAITEM WHERE ZMEDIALOCALPATH IS NOT NULL",
-        "SELECT ZTHUMBNAILLOCALPATH FROM ZWAMEDIAITEM WHERE ZTHUMBNAILLOCALPATH IS NOT NULL",
-        "SELECT ZXMPPTHUMBPATH FROM ZWAMEDIAITEM WHERE ZXMPPTHUMBPATH IS NOT NULL",
-        "SELECT ZTHUMBNAILPATH FROM ZWAMESSAGEDATAITEM WHERE ZTHUMBNAILPATH IS NOT NULL",
-        "SELECT ZPATH FROM ZWAPROFILEPICTUREITEM WHERE ZPATH IS NOT NULL",
-    ],
+    path_column_marker: "PATH",
     skip_dirs: &["Profile"],
     sanity_query: "SELECT COUNT(*) FROM ZWAMESSAGE",
 };
@@ -206,7 +227,7 @@ mod tests {
             app_dir: dir,
             media_dir: "Media",
             db: "t.sqlite",
-            queries: &["SELECT p FROM m WHERE p IS NOT NULL"],
+            path_column_marker: "P",
             skip_dirs: &["Profile"],
             sanity_query: "SELECT COUNT(*) FROM msg",
         }
@@ -231,6 +252,20 @@ mod tests {
             vec![media.join("drop.jpg")],
             "only the unreferenced file"
         );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn refuses_when_no_column_could_hold_a_path() {
+        let root = std::env::temp_dir().join(format!("mh-orph3-{:?}", std::thread::current().id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Media/chat")).unwrap();
+        fs::write(root.join("Media/chat/a.jpg"), b"a").unwrap();
+        make_db(&root, &["Media/chat/a.jpg"]);
+        let leaked: &'static str = Box::leak(root.to_string_lossy().into_owned().into_boxed_str());
+        let mut sp = spec(leaked);
+        sp.path_column_marker = "NOSUCHCOLUMN";
+        assert!(find(&sp).is_err(), "an unexpected schema must refuse");
         fs::remove_dir_all(&root).unwrap();
     }
 
