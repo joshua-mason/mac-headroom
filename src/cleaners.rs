@@ -47,6 +47,11 @@ pub struct Cleaner {
     /// person would recognise as their own content.
     #[serde(default, skip_deserializing)]
     pub opt_in: bool,
+    /// A command that prints the directory a command cleaner empties. Measuring
+    /// it before and after is the only way to know what a tool's own clean
+    /// command actually freed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub measure: Vec<String>,
     /// Built-in only: files are found by asking an application's own database
     /// what it still references, rather than by matching a path.
     #[serde(skip)]
@@ -66,13 +71,15 @@ fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &
         source: Source::Builtin,
         disabled: false,
         opt_in: false,
+        measure: vec![],
         orphans: None,
     }
 }
 
-fn cmd(name: &str, summary: &str, why_safe: &str, argv: &[&str]) -> Cleaner {
+fn cmd(name: &str, summary: &str, why_safe: &str, argv: &[&str], measure: &[&str]) -> Cleaner {
     Cleaner {
         command: argv.iter().map(|s| s.to_string()).collect(),
+        measure: measure.iter().map(|s| s.to_string()).collect(),
         ..paths(name, summary, why_safe, None, &[])
     }
 }
@@ -146,24 +153,28 @@ pub fn builtins() -> Vec<Cleaner> {
             "npm package cache",
             "npm's own cache clean. Packages re-download on the next install.",
             &["npm", "cache", "clean", "--force"],
+            &["npm", "config", "get", "cache"],
         ),
         cmd(
             "pnpm-store",
             "pnpm store (unreferenced packages only)",
             "pnpm's own prune. It removes only packages no project references.",
             &["pnpm", "store", "prune"],
+            &["pnpm", "store", "path"],
         ),
         cmd(
             "uv-cache",
             "uv Python package cache",
             "uv's own cache clean. Wheels re-download on the next sync.",
             &["uv", "cache", "clean"],
+            &["uv", "cache", "dir"],
         ),
         cmd(
             "go-build-cache",
             "Go build cache",
             "Go's own clean. The next build recompiles.",
             &["go", "clean", "-cache"],
+            &["go", "env", "GOCACHE"],
         ),
         orphan_cleaner(
             "whatsapp-orphans",
@@ -177,6 +188,7 @@ pub fn builtins() -> Vec<Cleaner> {
             "Homebrew downloads and old formula versions",
             "brew cleanup with --prune=all. Keeps every installed formula, removes only downloads and superseded versions.",
             &["brew", "cleanup", "-s", "--prune=all"],
+            &["brew", "--cache"],
         ),
     ]
 }
@@ -210,6 +222,9 @@ impl Cleaner {
             (true, true) => return Err(format!("{n}: needs either paths or command")),
             (false, false) => return Err(format!("{n}: paths and command are mutually exclusive")),
             _ => {}
+        }
+        if self.command.is_empty() && !self.measure.is_empty() {
+            return Err(format!("{n}: measure only applies to a command cleaner"));
         }
         if self.paths.is_empty() && (self.keep_newest.is_some() || self.older_than_days.is_some()) {
             return Err(format!(
@@ -271,8 +286,17 @@ pub struct Outcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     pub targets: Vec<Target>,
-    /// Bytes reclaimed, or that would be. Always 0 for command cleaners.
+    /// Bytes reclaimed, or that would be. For a command cleaner this is only
+    /// meaningful when `measured` is true.
     pub bytes: u64,
+    /// Whether `bytes` for a command cleaner comes from a measurement. A tool's
+    /// own clean command reports nothing we can trust, so without a measurement
+    /// the honest figure is "unknown", not zero.
+    pub measured: bool,
+    /// For a command cleaner in a dry run: how big its cache is now. An upper
+    /// bound on what running it could free, not a promise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_bytes: Option<u64>,
 }
 
 fn epoch(t: SystemTime) -> u64 {
@@ -345,6 +369,60 @@ fn candidates(c: &Cleaner) -> Vec<(PathBuf, Option<String>)> {
     out
 }
 
+/// Ask a tool where its cache lives. Anything that is not an existing absolute
+/// directory is treated as "cannot measure", never as an empty cache.
+fn measure_dir(argv: &[String]) -> Option<PathBuf> {
+    let (bin, args) = argv.split_first()?;
+    if !on_path(bin) {
+        return None;
+    }
+    let out = Command::new(bin)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())?
+        .to_string();
+    let dir = PathBuf::from(expand(&line));
+    (dir.is_absolute() && dir.is_dir()).then_some(dir)
+}
+
+/// The one line of a failed command's stderr most likely to say why. Warnings
+/// are skipped, since tools print those even when they succeed.
+pub fn failure_line(stderr: &str) -> Option<String> {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.to_ascii_lowercase().contains(" warn "))
+        .filter(|l| !l.to_ascii_lowercase().starts_with("npm warn"))
+        .collect();
+    let telling = [
+        "error",
+        "fatal",
+        "not loaded",
+        "denied",
+        "not found",
+        "no such",
+    ];
+    let pick = lines
+        .iter()
+        .find(|l| telling.iter().any(|t| l.to_ascii_lowercase().contains(t)))
+        .or(lines.last())?;
+    let clean: String = pick.replace('\t', " ");
+    Some(if clean.chars().count() > 200 {
+        format!("{}…", clean.chars().take(200).collect::<String>())
+    } else {
+        clean
+    })
+}
+
 fn remove(path: &PathBuf) -> std::io::Result<()> {
     let md = std::fs::symlink_metadata(path)?;
     if md.is_dir() {
@@ -363,6 +441,8 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
         command: None,
         targets: Vec::new(),
         bytes: 0,
+        measured: false,
+        cache_bytes: None,
     };
     if let Some(proc_name) = &c.skip_if_running {
         if is_running(proc_name) {
@@ -416,19 +496,36 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
             out.reason = Some(format!("{} is not installed", argv[0]));
             return out;
         }
+        let cache = measure_dir(&c.measure);
+        let before = cache.as_deref().map(disk_usage);
         if !apply {
             out.status = Status::WouldRun;
+            out.cache_bytes = before;
             return out;
         }
-        let status = Command::new(&argv[0])
+        match Command::new(&argv[0])
             .args(&argv[1..])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        out.status = match status {
-            Ok(s) if s.success() => Status::Ran,
-            _ => Status::Failed,
-        };
+            .stderr(Stdio::piped())
+            .output()
+        {
+            Ok(o) if o.status.success() => out.status = Status::Ran,
+            Ok(o) => {
+                out.status = Status::Failed;
+                out.reason = Some(
+                    failure_line(&String::from_utf8_lossy(&o.stderr))
+                        .unwrap_or_else(|| format!("exited with {}", o.status)),
+                );
+            }
+            Err(e) => {
+                out.status = Status::Failed;
+                out.reason = Some(e.to_string());
+            }
+        }
+        if let (Some(dir), Some(b)) = (cache, before) {
+            out.bytes = b.saturating_sub(disk_usage(&dir));
+            out.measured = true;
+        }
         return out;
     }
 
@@ -466,9 +563,28 @@ pub fn print_text(c: &Cleaner, o: &Outcome) {
     match o.status {
         Status::Skipped => println!("  skipped: {}", o.reason.as_deref().unwrap_or("")),
         Status::Nothing => println!("  nothing to clear"),
-        Status::WouldRun => println!("  would run: {}", o.command.as_deref().unwrap_or("")),
-        Status::Ran => println!("  ran: {}", o.command.as_deref().unwrap_or("")),
-        Status::Failed => println!("  failed: {}", o.command.as_deref().unwrap_or("")),
+        Status::WouldRun => match o.cache_bytes {
+            Some(b) => println!(
+                "  would run: {}  (its cache is {} now; it may free less)",
+                o.command.as_deref().unwrap_or(""),
+                human(b)
+            ),
+            None => println!("  would run: {}", o.command.as_deref().unwrap_or("")),
+        },
+        Status::Ran => {
+            let freed = if o.measured {
+                format!("  (freed {})", human(o.bytes))
+            } else {
+                String::new()
+            };
+            println!("  ran: {}{freed}", o.command.as_deref().unwrap_or(""));
+        }
+        Status::Failed => {
+            println!("  failed: {}", o.command.as_deref().unwrap_or(""));
+            if let Some(r) = &o.reason {
+                println!("          {r}");
+            }
+        }
         Status::WouldClear | Status::Cleared if o.targets.len() > 40 => {
             let verb = if o.status == Status::Cleared {
                 "removed"
@@ -509,6 +625,15 @@ mod tests {
             source: Source::Config,
             ..super::paths(name, "", "because", None, paths)
         }
+    }
+
+    #[test]
+    fn picks_the_line_that_explains_a_failure() {
+        let dyld = "dyld[96489]: Library not loaded: /opt/homebrew/opt/llhttp/lib/libllhttp.9.3.dylib\n  Referenced from: <x> /opt/homebrew/Cellar/node/25.8.1_1/bin/node\n  Reason: tried: a, b";
+        assert!(failure_line(dyld).unwrap().contains("Library not loaded"));
+        let npm = "npm warn using --force Recommended protections disabled.\nnpm error code EACCES";
+        assert_eq!(failure_line(npm).unwrap(), "npm error code EACCES");
+        assert_eq!(failure_line("  \n"), None);
     }
 
     #[test]

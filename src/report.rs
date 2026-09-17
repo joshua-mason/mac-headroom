@@ -20,8 +20,42 @@ struct AuditEntry {
     at: u64,
     cleaner: String,
     result: String,
-    bytes: u64,
+    /// None when nothing measured it. Shown as unknown, never as zero.
+    bytes: Option<u64>,
     path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+/// One audit line. The first format had five columns and wrote 0 for every
+/// command it ran without measuring, so for those old lines a command's 0 means
+/// unknown. The current format adds a sixth column and writes "-" for unknown.
+fn parse_audit_line(line: &str) -> Option<AuditEntry> {
+    let f: Vec<&str> = line.splitn(6, '\t').collect();
+    if f.len() < 5 {
+        return None;
+    }
+    let result = f[2].to_string();
+    let is_command = matches!(result.as_str(), "ran" | "failed" | "skipped" | "would_run")
+        && !f[4].starts_with('/');
+    let bytes = match (f.len(), f[3]) {
+        (_, "-") => None,
+        (5, _) if is_command => None,
+        (_, n) => n.parse().ok(),
+    };
+    let detail = f
+        .get(5)
+        .map(|d| d.trim())
+        .filter(|d| !d.is_empty())
+        .map(str::to_string);
+    Some(AuditEntry {
+        at: f[0].parse().ok()?,
+        cleaner: f[1].to_string(),
+        result,
+        bytes,
+        path: f[4].to_string(),
+        detail,
+    })
 }
 
 #[derive(Serialize)]
@@ -74,22 +108,7 @@ fn history() -> Vec<Reading> {
 
 fn audit(limit: usize) -> Vec<AuditEntry> {
     let text = fs::read_to_string(state_dir().join("audit.log")).unwrap_or_default();
-    let mut entries: Vec<AuditEntry> = text
-        .lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.splitn(5, '\t').collect();
-            if f.len() < 5 {
-                return None;
-            }
-            Some(AuditEntry {
-                at: f[0].parse().ok()?,
-                cleaner: f[1].to_string(),
-                result: f[2].to_string(),
-                bytes: f[3].parse().unwrap_or(0),
-                path: f[4].to_string(),
-            })
-        })
-        .collect();
+    let mut entries: Vec<AuditEntry> = text.lines().filter_map(parse_audit_line).collect();
     entries.reverse();
     entries.truncate(limit);
     entries
@@ -172,3 +191,30 @@ pub fn open(path: &Path) -> bool {
 }
 
 const TEMPLATE: &str = include_str!("report.html");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_command_lines_are_unmeasured_not_zero() {
+        let e = parse_audit_line("1\tnpm-cache\tran\t0\tnpm cache clean --force").unwrap();
+        assert_eq!(e.bytes, None);
+        let e =
+            parse_audit_line("1\tlanguage-caches\tdeleted\t0\t/Users/x/Library/Caches/a").unwrap();
+        assert_eq!(e.bytes, Some(0), "an empty file really was 0 bytes");
+    }
+
+    #[test]
+    fn new_lines_carry_measurement_and_reason() {
+        let e = parse_audit_line("1\tnpm-cache\tran\t1048576\tnpm cache clean --force\t").unwrap();
+        assert_eq!(e.bytes, Some(1_048_576));
+        assert_eq!(e.detail, None);
+        let e = parse_audit_line(
+            "1\tnpm-cache\tfailed\t-\tnpm cache clean --force\tLibrary not loaded",
+        )
+        .unwrap();
+        assert_eq!(e.bytes, None);
+        assert_eq!(e.detail.as_deref(), Some("Library not loaded"));
+    }
+}
