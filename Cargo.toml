@@ -1,6 +1,6 @@
 [package]
 name = "mac-headroom"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Find where macOS disk space went, and clear caches safely. Every command answers in JSON, states why each thing is safe to delete, and is a dry run unless told otherwise, so an AI agent can diagnose a full disk and explain it before anything is removed."
 license = "MIT"
