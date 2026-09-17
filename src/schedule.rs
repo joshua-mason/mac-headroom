@@ -575,10 +575,11 @@ fn merged_path(current: &std::ffi::OsStr, fallbacks: Vec<PathBuf>) -> std::ffi::
     std::env::join_paths(all).unwrap_or_else(|_| current.to_os_string())
 }
 
-/// launchd starts jobs with a bare PATH, so command cleaners would report their
-/// tools as not installed. The job carries the PATH it was installed with; this
-/// only fills gaps behind it.
-fn extend_path() {
+/// launchd, and any app opened from Finder, start programs with a bare PATH, so
+/// command cleaners would report their tools as not installed. This only fills
+/// gaps behind whatever PATH is already set, so it is safe to call for every
+/// command, and is.
+pub fn extend_path() {
     let current = std::env::var_os("PATH").unwrap_or_default();
     std::env::set_var("PATH", merged_path(&current, fallback_dirs(&home())));
 }

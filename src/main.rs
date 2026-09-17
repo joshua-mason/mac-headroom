@@ -160,6 +160,7 @@ fn emit<T: Serialize>(value: &T) {
 
 fn main() {
     let cli = Cli::parse();
+    schedule::extend_path();
     let Some(cmd) = cli.cmd else {
         scan(cli.json, cli.no_open);
         return;
@@ -387,6 +388,10 @@ struct Overview {
     cleaners_enabled: Vec<String>,
     schedule: schedule::Status,
     state: StateSummary,
+    /// The last scan's findings, so anything showing status (the app's menu bar
+    /// item, an agent) can say what is freeable without an 80-second rescan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    findings: Option<findings::Findings>,
 }
 
 #[derive(Serialize)]
@@ -422,6 +427,7 @@ fn overview() -> Overview {
         .map(|rd| rd.flatten().count())
         .unwrap_or(0);
     Overview {
+        findings: findings::load(),
         disk: diag::disk().map(|d| DiskNow {
             used: d.used,
             free: d.free,
