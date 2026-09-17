@@ -194,7 +194,7 @@ tells the agent the order of operations and the deletion rules.
 ## Install
 
 ```
-cargo install --git https://github.com/joshua-mason/mac-headroom --tag v0.1.0
+cargo install --git https://github.com/joshua-mason/mac-headroom --tag v0.2.0
 ```
 
 Or from a clone, `cargo install --path .`. Either way the binary lands in
@@ -214,5 +214,6 @@ mac-headroom report            # the whole picture in a browser
 
 ## Status
 
-0.1.0, the first tagged release. Working on macOS 15 and 26 on Apple silicon.
+0.2.0. Adds `whatsapp-orphans`, the first cleaner that finds files by asking an
+application what it still references rather than by matching a path. Working on macOS 15 and 26 on Apple silicon.
 Not yet: Homebrew packaging, or prebuilt binaries.
