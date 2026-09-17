@@ -4,10 +4,12 @@ import WebKit
 
 /// The same HTML report the CLI writes, shown in a window. The first step for
 /// any screen that has not been rebuilt natively yet.
-struct ReportView: View {
+public struct ReportView: View {
     @EnvironmentObject var store: Store
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         Group {
             if let url = store.reportURL {
                 WebView(url: url)

@@ -1,7 +1,8 @@
 import Foundation
+import SwiftUI
 
 @MainActor
-final class Store: ObservableObject {
+public final class Store: ObservableObject {
     @Published var status: Status?
     @Published var error: String?
     @Published var scanning = false
@@ -12,7 +13,8 @@ final class Store: ObservableObject {
 
     private var timer: Timer?
 
-    init() {
+    public init(autoRefresh: Bool = true) {
+        guard autoRefresh else { return }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
@@ -33,7 +35,18 @@ final class Store: ObservableObject {
 
     var freeableTotal: UInt64 { freeable.reduce(0) { $0 + ($1.bytes ?? 0) } }
 
-    func refresh() async {
+    /// What a clear frees now. Items whose app is open are skipped by the CLI.
+    var clearableNow: UInt64 { freeable.filter { $0.blockedBy == nil }.reduce(0) { $0 + ($1.bytes ?? 0) } }
+
+    /// Apps that must be quit to clear everything, and how much that would add.
+    var blockedApps: (names: [String], bytes: UInt64) {
+        let blocked = freeable.filter { $0.blockedBy != nil }
+        var names: [String] = []
+        for item in blocked { if let n = item.blockedBy, !names.contains(n) { names.append(n) } }
+        return (names, blocked.reduce(0) { $0 + ($1.bytes ?? 0) })
+    }
+
+    public func refresh() async {
         do {
             status = try Headroom.decode(Status.self, from: try await Headroom.run(["status"]))
             error = nil

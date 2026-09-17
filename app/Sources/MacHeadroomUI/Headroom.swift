@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// The app never measures or deletes anything itself. It runs the mac-headroom
 /// command line tool bundled inside it and reads its JSON, so the app, the CLI
@@ -148,3 +149,22 @@ enum Level {
         }
     }
 }
+
+extension Level {
+    var dot: Color {
+        switch self {
+        case .full: return .red
+        case .low, .tight: return .orange
+        case .fine, .plenty: return .green
+        }
+    }
+
+    var bar: Color {
+        switch self {
+        case .full: return .red
+        case .low, .tight: return .orange
+        case .fine, .plenty: return .accentColor
+        }
+    }
+}
+
