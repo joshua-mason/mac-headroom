@@ -414,7 +414,14 @@ function renderLook() {
         const blocked = a.cleaner.blocked_by ? `<span class="chip warn">Quit ${esc(a.cleaner.blocked_by)} first</span>` : '';
         return `<div class="cmdbox"><span class="cmd">${esc(cmd)}</span>${copyBtn(cmd)}<span class="quiet" style="margin:0">${esc(a.label)}${size}</span>${blocked}</div>`;
       }).join('')}
-      ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
+      ${(x.items || []).length ? `<div class="items" style="margin-top:10px">${x.items.map(i => `
+        <div class="item">
+          <div class="size">${h(i.bytes)}</div>
+          <div><span class="title">${esc(tilde(i.path).split('/').slice(-4).join('/'))}</span><span class="chip ${i.safe ? '' : 'warn'}">${i.safe ? 'Nothing to lose' : 'Check first'}</span>
+            <p>${esc(i.note)}</p>
+            ${i.command ? `<div class="cmdbox" style="margin-top:8px"><span class="cmd" style="overflow-wrap:anywhere">${esc(i.command)}</span>${copyBtn(i.command)}</div>` : ''}</div>
+        </div>`).join('')}</div>` : ''}
+      ${x.largest && x.largest.length && !(x.items || []).length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
       ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
     </div>`).join('')}
     ${suggestLine}`;
