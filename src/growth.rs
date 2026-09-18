@@ -21,7 +21,8 @@ pub fn scan(root: &Path, depth: usize) -> (Sizes, u64) {
     let walker = walkdir::WalkDir::new(root)
         .follow_links(false)
         .same_file_system(true)
-        .into_iter();
+        .into_iter()
+        .filter_entry(|e| !(e.file_type().is_dir() && crate::util::skip_protected(e.path())));
     for entry in walker {
         let Ok(entry) = entry else {
             skipped += 1;

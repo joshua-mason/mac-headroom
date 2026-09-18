@@ -63,6 +63,14 @@ threshold, and it writes a report and notifies only when it is. Run it freely; i
 deletes nothing. `schedule status` shows whether the watch is installed and at what
 threshold.
 
+## Suggesting a built-in
+
+After writing a cleaner into the user's config for something the built-ins do not
+cover, offer `mac-headroom suggest <name>`. It opens a pre-filled GitHub issue,
+including the config entry, for the user to review and submit. Never submit it for
+them, and make sure the `why_safe` text is honest first, since it is what reviewers
+judge the suggestion on.
+
 ## Opt-in cleaners
 
 `whatsapp-orphans` never runs as part of `clean`, because it removes media a person

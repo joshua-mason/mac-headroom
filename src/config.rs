@@ -26,8 +26,10 @@ pub struct Config {
     /// Extra directories to include in the space breakdown, beyond your home
     /// folder. Absolute paths. Scanning a system directory without sudo skips
     /// what it cannot read, and the report says so.
+    /// Replaces the default list when set. Leave it out to use the defaults;
+    /// set it to an empty list to scan only the home folder.
     #[serde(default)]
-    pub scan_roots: Vec<String>,
+    pub scan_roots: Option<Vec<String>>,
     /// Notify when free space falls below this share of the disk. 0 turns it off.
     #[serde(default = "default_alert")]
     pub alert_below_percent: f64,
@@ -71,7 +73,7 @@ pub fn validate(cfg: &Config) -> Findings {
     if !(0.0..=90.0).contains(&cfg.alert_below_percent) {
         problems.push("alert_below_percent must be between 0 and 90".into());
     }
-    for r in &cfg.scan_roots {
+    for r in cfg.scan_roots.iter().flatten() {
         let p = std::path::Path::new(r);
         if !p.is_absolute() {
             problems.push(format!("scan_roots: {r:?} must be an absolute path"));
@@ -121,18 +123,34 @@ pub fn alert_below_percent() -> f64 {
         .unwrap_or_else(|_| default_alert())
 }
 
-/// Extra roots the space breakdown should cover. Anything not on this machine
-/// is dropped here rather than failing a scan later.
+/// Locations outside the home folder scanned when the config does not say
+/// otherwise. Between them they cover nearly everything on the data volume that
+/// a person without a config file would otherwise see as one unexplained lump.
+pub const DEFAULT_SCAN_ROOTS: &[&str] = &[
+    "/Applications",
+    "/Library",
+    "/System/Library/AssetsV2",
+    "/opt",
+    "/usr/local",
+    "/private/var",
+    "/private/tmp",
+];
+
+/// The roots actually scanned, beyond the home folder: the config's list if it
+/// has one, otherwise the defaults that exist here and live on the data volume.
 pub fn scan_roots() -> Vec<PathBuf> {
-    load()
-        .map(|c| {
-            c.scan_roots
-                .iter()
-                .map(PathBuf::from)
-                .filter(|p| p.is_dir())
-                .collect()
-        })
-        .unwrap_or_default()
+    match load().ok().and_then(|c| c.scan_roots) {
+        Some(list) => list
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .collect(),
+        None => DEFAULT_SCAN_ROOTS
+            .iter()
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir() && crate::util::on_data_volume(p))
+            .collect(),
+    }
 }
 
 pub fn all_cleaners() -> Result<Vec<Cleaner>, String> {
@@ -159,11 +177,11 @@ pub const EXAMPLE: &str = r#"# mac-headroom configuration
 # explicitly with --only. Names are in `mac-headroom list`.
 disable = []
 
-# Directories outside your home folder to include in the space breakdown.
-# Without these, `growth` and the report only ever see ~, which on most Macs is
-# about two thirds of the data volume. Scanning these without sudo skips what it
-# cannot read (/private/var especially), and the report marks the figure as a floor.
-scan_roots = ["/Applications", "/Library", "/opt"]
+# Folders outside your home folder to include in the space breakdown. Leave this
+# out to use the defaults: /Applications, /Library, /System/Library/AssetsV2,
+# /opt, /usr/local, /private/var and /private/tmp, wherever they exist. Setting
+# it replaces that list entirely; an empty list scans only your home folder.
+# scan_roots = ["/Applications", "/Library"]
 
 # Notify when free space drops below this share of the disk, checked hourly by
 # the watch job that `schedule install` sets up. 0 turns notifications off.
@@ -231,6 +249,8 @@ pub struct Check {
     pub disabled: Vec<String>,
     pub user_cleaners: Vec<String>,
     pub scan_roots: Vec<String>,
+    /// True when scan_roots come from the defaults rather than the config.
+    pub default_scan_roots: bool,
     pub alert_below_percent: f64,
 }
 
@@ -245,7 +265,11 @@ pub fn check() -> Check {
             notes: validate(&cfg).notes,
             disabled: cfg.disable.clone(),
             user_cleaners: cfg.cleaners.iter().map(|c| c.name.clone()).collect(),
-            scan_roots: cfg.scan_roots.clone(),
+            scan_roots: scan_roots()
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+            default_scan_roots: cfg.scan_roots.is_none(),
             alert_below_percent: cfg.alert_below_percent,
         },
         Err(e) => Check {
@@ -256,6 +280,7 @@ pub fn check() -> Check {
             disabled: vec![],
             user_cleaners: vec![],
             scan_roots: vec![],
+            default_scan_roots: true,
             alert_below_percent: 0.0,
         },
     }
@@ -278,7 +303,15 @@ pub fn print_check(c: &Check) {
         println!("  user cleaners       {}", c.user_cleaners.join(", "));
     }
     if !c.scan_roots.is_empty() {
-        println!("  extra scan roots    {}", c.scan_roots.join(", "));
+        println!(
+            "  scan roots          {}{}",
+            c.scan_roots.join(", "),
+            if c.default_scan_roots {
+                "  (defaults)"
+            } else {
+                ""
+            }
+        );
     }
     println!(
         "  low space alert     {}",
@@ -308,7 +341,10 @@ mod tests {
     fn example_parses_and_is_empty() {
         let cfg: Config = toml::from_str(EXAMPLE).unwrap();
         assert!(cfg.cleaners.is_empty());
-        assert_eq!(cfg.scan_roots.len(), 3);
+        assert_eq!(
+            cfg.scan_roots, None,
+            "the example leaves the defaults in place"
+        );
         assert_eq!(cfg.alert_below_percent, 5.0);
         assert!(validate(&cfg).problems.is_empty());
 
@@ -316,7 +352,7 @@ mod tests {
         // would silently switch alerting off.
         let empty: Config = toml::from_str("").unwrap();
         assert_eq!(empty.alert_below_percent, 5.0);
-        assert!(empty.scan_roots.is_empty());
+        assert_eq!(empty.scan_roots, None);
     }
 
     #[test]

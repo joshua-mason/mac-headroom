@@ -26,7 +26,9 @@ pub struct Volume {
 pub struct DiskImage {
     /// The file the mounted image is read from. This is what costs real space.
     pub backing_path: String,
-    pub backing_bytes: u64,
+    /// None when the file sits in a folder the scan was told not to read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backing_bytes: Option<u64>,
     /// Whether that file is somewhere a scan would already have counted.
     pub backing_under_home: bool,
 }
@@ -127,12 +129,15 @@ fn images() -> Vec<DiskImage> {
             continue;
         }
         out.push(DiskImage {
-            backing_bytes: crate::util::disk_usage(Path::new(path)),
+            // Sizing a file in Downloads or Documents is enough to make macOS
+            // stop and ask an app for permission, which would stall the report.
+            backing_bytes: (!crate::util::inside_protected(Path::new(path)))
+                .then(|| crate::util::disk_usage(Path::new(path))),
             backing_under_home: Path::new(path).starts_with(&home),
             backing_path: path.to_string(),
         });
     }
-    out.sort_by_key(|i| std::cmp::Reverse(i.backing_bytes));
+    out.sort_by_key(|i| std::cmp::Reverse(i.backing_bytes.unwrap_or(0)));
     out.dedup_by(|a, b| a.backing_path == b.backing_path);
     out
 }
@@ -190,7 +195,7 @@ pub fn print_text(v: &Volumes) {
         for i in &v.images {
             println!(
                 "  {:>9}  {}{}",
-                human(i.backing_bytes),
+                i.backing_bytes.map(human).unwrap_or_else(|| "?".into()),
                 i.backing_path,
                 if i.backing_under_home {
                     ""

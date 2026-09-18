@@ -575,10 +575,11 @@ fn merged_path(current: &std::ffi::OsStr, fallbacks: Vec<PathBuf>) -> std::ffi::
     std::env::join_paths(all).unwrap_or_else(|_| current.to_os_string())
 }
 
-/// launchd starts jobs with a bare PATH, so command cleaners would report their
-/// tools as not installed. The job carries the PATH it was installed with; this
-/// only fills gaps behind it.
-fn extend_path() {
+/// launchd, and any app opened from Finder, start programs with a bare PATH, so
+/// command cleaners would report their tools as not installed. This only fills
+/// gaps behind whatever PATH is already set, so it is safe to call for every
+/// command, and is.
+pub fn extend_path() {
     let current = std::env::var_os("PATH").unwrap_or_default();
     std::env::set_var("PATH", merged_path(&current, fallback_dirs(&home())));
 }
@@ -617,6 +618,9 @@ pub fn run(only: &[String], growth: bool) {
     let report = crate::run_clean(false, true, only);
     let free_after = crate::diag::disk().map(|d| d.free);
     record_run(free_before, free_after);
+    // Refresh what can be freed and what is worth a look, after cleaning, so
+    // the report describes the disk as it now is.
+    crate::findings::save(&crate::findings::gather());
     // Leave a current report behind, so the weekly picture is ready to open.
     let report_path = crate::report::default_path();
     match crate::report::write(&crate::report::gather(), &report_path) {

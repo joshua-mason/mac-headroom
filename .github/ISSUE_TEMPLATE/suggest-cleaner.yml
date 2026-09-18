@@ -1,0 +1,56 @@
+name: Suggest a cleaner
+description: Something that takes up space and is safe to remove, which mac-headroom does not clean yet.
+title: "Cleaner: "
+labels: ["cleaner suggestion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting one. Every built-in cleaner has to explain honestly why removing its files is safe, so the most useful thing you can tell us is **how you know**.
+
+        If you started this from `mac-headroom suggest` or the report, some fields are already filled in. Nothing is sent until you press Submit, so check it first; paths show your home folder as `~`.
+  - type: input
+    id: what
+    attributes:
+      label: What is it?
+      description: The app or tool that creates these files.
+      placeholder: e.g. Unity Hub, the Android emulator, Adobe Premiere
+    validations:
+      required: true
+  - type: textarea
+    id: locations
+    attributes:
+      label: Where are the files?
+      description: One path per line, using ~ for your home folder.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: size
+    attributes:
+      label: How big did it get for you?
+  - type: textarea
+    id: why_safe
+    attributes:
+      label: Why is it safe to remove?
+      description: What happens after the files are deleted? Does the app recreate them, download them again, or not need them at all? Is anything lost?
+    validations:
+      required: true
+  - type: dropdown
+    id: running
+    attributes:
+      label: Should it wait until the app is closed?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+  - type: textarea
+    id: checked
+    attributes:
+      label: How did you check?
+      description: For example, you deleted them and the app kept working, or the app's own documentation says so.
+  - type: textarea
+    id: config
+    attributes:
+      label: Your config entry, if you wrote one
+      render: toml

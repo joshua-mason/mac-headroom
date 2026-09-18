@@ -89,6 +89,23 @@ eventually delete something real. Because it removes what you would recognise as
 your own photos and videos, it never runs as part of a plain `clean`: you have
 to name it, or list it under `enable` in the config.
 
+## Suggesting a built-in
+
+The built-in cleaners only cover what someone has already found. If you come
+across something else that takes up space and is safe to remove, suggest it:
+
+```sh
+mac-headroom suggest                        # a blank suggestion
+mac-headroom suggest ~/Library/Caches/Foo   # fills in the location and its size
+mac-headroom suggest my-cleaner             # one you wrote in your config, entry included
+```
+
+Each opens a GitHub issue form with what the tool already knows filled in, with
+your home folder shown as `~`. Nothing is sent unless you press Submit. The
+report has the same links, beside your own cleaners and under the lists of
+large items. The most useful thing you can add is how you know removing it is
+safe, since every built-in has to explain that honestly.
+
 ## Your own cleaners
 
 `~/.config/mac-headroom/config.toml` adds cleaners with the same fields the

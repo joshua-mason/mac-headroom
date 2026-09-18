@@ -2,10 +2,12 @@ mod alert;
 mod cleaners;
 mod config;
 mod diag;
+mod findings;
 mod growth;
 mod orphans;
 mod report;
 mod schedule;
+mod suggest;
 mod util;
 mod volumes;
 
@@ -25,12 +27,25 @@ struct Cli {
     /// Emit JSON instead of text. Works with every subcommand.
     #[arg(long, global = true)]
     json: bool,
+    /// With no command, scan everything and open the report. That is the whole
+    /// first run for someone whose disk is full.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
+    /// With no command or with `scan`: write the report without opening it
+    #[arg(long, global = true)]
+    no_open: bool,
+    /// Never read folders macOS protects (Desktop, Documents, Downloads, Photos,
+    /// other apps' data, the Trash), so running without Full Disk Access raises
+    /// no privacy prompts. What was skipped is reported.
+    #[arg(long, global = true)]
+    skip_protected: bool,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Look at everything, find what can be freed, and open the report.
+    /// What running mac-headroom on its own does.
+    Scan,
     /// Report disk usage and check for APFS snapshot pinning
     Diagnose,
     /// List the available cleaners and why each is safe
@@ -70,6 +85,12 @@ enum Cmd {
     },
     /// One-screen overview: disk, config, weekly job, recorded history
     Status,
+    /// Suggest something to become a built-in cleaner. Opens a pre-filled GitHub
+    /// issue for you to check; nothing is sent unless you submit it.
+    Suggest {
+        /// One of your own cleaners, or a path. Leave out for a blank suggestion.
+        target: Option<String>,
+    },
     /// What else shares this disk: other volumes in the container, and mounted images
     Volumes,
     /// Look at free space and notify if it is low. Cheap enough to run hourly.
@@ -83,9 +104,6 @@ enum Cmd {
         /// Where to write it (default: the state directory)
         #[arg(long, value_name = "FILE")]
         out: Option<PathBuf>,
-        /// Write the file without opening a browser
-        #[arg(long)]
-        no_open: bool,
     },
 }
 
@@ -147,7 +165,14 @@ fn emit<T: Serialize>(value: &T) {
 
 fn main() {
     let cli = Cli::parse();
-    match cli.cmd {
+    schedule::extend_path();
+    util::set_skip_protected(cli.skip_protected);
+    let Some(cmd) = cli.cmd else {
+        scan(cli.json, cli.no_open);
+        return;
+    };
+    match cmd {
+        Cmd::Scan => scan(cli.json, cli.no_open),
         Cmd::Diagnose => {
             let Some(r) = diag::report() else {
                 eprintln!("could not read diskutil info for /System/Volumes/Data");
@@ -289,6 +314,22 @@ fn main() {
                 print_overview(&s)
             }
         }
+        Cmd::Suggest { target } => match suggest::build(target.as_deref()) {
+            Ok(sg) => {
+                if cli.json {
+                    emit(&sg);
+                } else {
+                    suggest::print_text(&sg);
+                }
+                if !cli.no_open && !cli.json {
+                    let _ = std::process::Command::new("open").arg(&sg.url).status();
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
         Cmd::Volumes => {
             let v = volumes::gather();
             if cli.json {
@@ -308,7 +349,8 @@ fn main() {
                 alert::print_text(&c)
             }
         }
-        Cmd::Report { out, no_open } => {
+        Cmd::Report { out } => {
+            let no_open = cli.no_open;
             let data = report::gather();
             let out = out.unwrap_or_else(report::default_path);
             if let Err(e) = report::write(&data, &out) {
@@ -352,6 +394,14 @@ struct Overview {
     cleaners_enabled: Vec<String>,
     schedule: schedule::Status,
     state: StateSummary,
+    /// The last scan's findings, so anything showing status (a menu bar
+    /// item, an agent) can say what is freeable without an 80-second rescan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    findings: Option<findings::Findings>,
+    /// Checked now, by this process, so it reflects whatever launched it: an
+    /// app gets its own answer, a terminal gets the terminal's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full_disk_access: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -387,6 +437,8 @@ fn overview() -> Overview {
         .map(|rd| rd.flatten().count())
         .unwrap_or(0);
     Overview {
+        findings: findings::load(),
+        full_disk_access: util::full_disk_access(),
         disk: diag::disk().map(|d| DiskNow {
             used: d.used,
             free: d.free,
@@ -487,6 +539,17 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
     if apply {
         report.free_after = diag::disk().map(|d| d.free);
         audit(&report);
+        // Anything showing what can be freed reads the saved findings. Left
+        // alone, they go on listing what was just removed, which makes a clear
+        // that worked look like one that did not.
+        if let Some(mut saved) = findings::load() {
+            saved.reclaimable = all
+                .iter()
+                .filter(|c| !c.disabled && !c.opt_in)
+                .map(cleaners::estimate)
+                .collect();
+            findings::save(&saved);
+        }
     }
 
     if !json {
@@ -551,5 +614,117 @@ fn audit(r: &CleanReport) {
                 status.trim_matches('"')
             );
         }
+    }
+}
+
+#[derive(Serialize)]
+struct ScanSummary {
+    free: Option<u64>,
+    total: Option<u64>,
+    safe_to_free: u64,
+    report: PathBuf,
+    findings: findings::Findings,
+}
+
+/// The first run. Someone installed this because their disk is full: record a
+/// reading, scan where the space is, size everything that can safely go, look
+/// for the usual large surprises, and put it all in front of them.
+fn scan(json: bool, no_open: bool) {
+    // Stages go to stderr so JSON on stdout stays clean. In JSON mode they are
+    // short fixed words an app can follow; otherwise they are for a person.
+    let say = |stage: &str, text: &str| {
+        if json {
+            eprintln!("progress: {stage}");
+        } else {
+            eprintln!("{text}");
+        }
+    };
+    say("disk", "Checking the disk…");
+    let disk = diag::report();
+    say(
+        "folders",
+        "Measuring where the space is. On a full disk this takes a minute or two…",
+    );
+    for root in std::iter::once(home()).chain(config::scan_roots()) {
+        growth::report(&root, 3, 100 << 20, 15);
+    }
+    say("cleaners", "Working out what can safely be freed…");
+    let found = findings::gather();
+    findings::save(&found);
+
+    let path = report::default_path();
+    if let Err(e) = report::write(&report::gather(), &path) {
+        eprintln!("could not write the report: {e}");
+        std::process::exit(1);
+    }
+    let safe: u64 = found
+        .reclaimable
+        .iter()
+        .filter_map(|e| e.bytes)
+        .filter(|b| *b >= 1 << 20)
+        .sum();
+
+    if json {
+        emit(&ScanSummary {
+            free: disk.as_ref().map(|d| d.free),
+            total: disk.as_ref().map(|d| d.total),
+            safe_to_free: safe,
+            report: path.clone(),
+            findings: found,
+        });
+    } else {
+        println!();
+        if let Some(d) = &disk {
+            let pct = 100.0 * d.free as f64 / d.total.max(1) as f64;
+            println!("{} free of {} ({pct:.0}%)", human(d.free), human(d.total));
+        }
+        let mut items: Vec<&cleaners::Estimate> = found
+            .reclaimable
+            .iter()
+            .filter(|e| e.bytes.unwrap_or(0) > 0)
+            .collect();
+        items.sort_by_key(|e| std::cmp::Reverse(e.bytes.unwrap_or(0)));
+        if items.is_empty() {
+            println!("\nNothing obvious to clear right now.");
+        } else {
+            println!("\nSafe to free now, about {}:", human(safe));
+            for e in items.iter().take(8) {
+                let extra = match &e.blocked_by {
+                    Some(app) => format!("  (quit {app} first)"),
+                    None if e.upper_bound => "  (up to)".to_string(),
+                    None => String::new(),
+                };
+                println!("  {:>9}  {}{extra}", human(e.bytes.unwrap_or(0)), e.title);
+            }
+        }
+        if !found.detections.is_empty() {
+            println!("\nWorth a look, your call:");
+            for d in found.detections.iter().take(6) {
+                println!("  {:>9}  {}", human(d.bytes), d.title);
+            }
+        }
+        if found.full_disk_access == Some(false) {
+            println!(
+                "\nmacOS is hiding some folders from this scan, including your Trash, so part"
+            );
+            println!("of your disk cannot be explained. To include them, open System Settings >");
+            println!("Privacy & Security > Full Disk Access, turn on your terminal app, then quit");
+            println!("the terminal, reopen it and run mac-headroom again.");
+        }
+        println!(
+            "\nThe full picture, with what each of these is: {}",
+            path.display()
+        );
+        println!("\nNext:");
+        println!("  mac-headroom clean          see exactly what would be removed");
+        println!("  mac-headroom clean --yes    remove it");
+        if !schedule::status().installed {
+            println!(
+                "  mac-headroom schedule install    check every week and warn when space runs low"
+            );
+        }
+    }
+    if !no_open && !report::open(&path) {
+        eprintln!("could not open a browser; open the file above by hand");
     }
 }
