@@ -141,6 +141,10 @@ group_by = "name-before-version"   # versions of one thing compete only with eac
 disable = ["spotify-cache"]  # built-ins to leave out of a plain `clean`
 ```
 
+`skip_if_open = true` leaves a match alone while any running program has it
+open. It is for files a tool replaces while older copies may still be running,
+such as a command line tool that updates itself under a long session.
+
 `group_by` matters wherever a tool keeps every version of every component in
 one folder. Without it, `keep_newest = 1` over such a folder keeps a single
 component and deletes every other one, because each match's only rivals are its

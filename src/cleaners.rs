@@ -51,6 +51,11 @@ pub struct Cleaner {
     /// puts every version of every component side by side in one folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_by: Option<GroupBy>,
+    /// Leave a match alone while any running program has it open. For files a
+    /// tool replaces while older copies may still be running, where deleting
+    /// the newest-but-one is fine and deleting one in use is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_if_open: bool,
     /// Only delete a match when nothing inside it was modified in the last N days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_than_days: Option<u64>,
@@ -91,6 +96,7 @@ fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &
         paths: globs.iter().map(|s| s.to_string()).collect(),
         command: vec![],
         keep_newest: None,
+        skip_if_open: false,
         group_by: None,
         older_than_days: None,
         source: Source::Builtin,
@@ -284,6 +290,21 @@ pub fn builtins() -> Vec<Cleaner> {
             "Go build cache",
             "Compiled pieces Go keeps so builds are quicker. Go rebuilds them when it needs them.",
         ),
+        Cleaner {
+            keep_newest: Some(2),
+            skip_if_open: true,
+            ..paths(
+                "claude-code-old-versions",
+                "Superseded copies of Claude Code",
+                "Claude Code downloads each update beside the last and launches the newest, and it updates most days, so the copies pile up at about 200 MB each. The newest two are kept, and so is any copy a running session still has open, since a long session goes on running the version it started with. What is left is copies nothing is using.",
+                None,
+                &["~/.local/share/claude/versions/*"],
+            )
+        }
+        .with_plain(
+            "Old versions of Claude Code",
+            "Claude Code keeps every version it has updated from. Only the newest is used.",
+        ),
         // Actions on things under "worth a look". Opt in, so a plain `clean`
         // never touches them: each is a deliberate choice someone makes once,
         // not part of a weekly routine. Being cleaners is what gives them the
@@ -388,6 +409,9 @@ impl Cleaner {
         }
         if self.command.is_empty() && !self.measure.is_empty() {
             return Err(format!("{n}: measure only applies to a command cleaner"));
+        }
+        if self.skip_if_open && self.paths.is_empty() {
+            return Err(format!("{n}: skip_if_open only applies to paths"));
         }
         if self.group_by.is_some() && self.keep_newest.is_none() {
             return Err(format!(
@@ -559,7 +583,31 @@ fn candidates(c: &Cleaner) -> Vec<(PathBuf, Option<String>)> {
             }
         }
     }
+    if c.skip_if_open {
+        for (p, kept) in out.iter_mut() {
+            if kept.is_none() && is_open(p) {
+                *kept = Some("a running program has it open".to_string());
+            }
+        }
+    }
     out
+}
+
+/// Whether any process has this path open, by asking lsof. An lsof that is
+/// missing or fails answers "open", because the point of the check is to not
+/// delete something in use, and "could not tell" is not "not in use".
+fn is_open(path: &Path) -> bool {
+    match Command::new("lsof")
+        .arg("-t")
+        .arg("--")
+        .arg(path)
+        .stderr(Stdio::null())
+        .output()
+    {
+        // lsof exits 1 with no output when nothing has the file open.
+        Ok(o) => !o.stdout.is_empty() || !(o.status.success() || o.status.code() == Some(1)),
+        Err(_) => true,
+    }
 }
 
 /// What a cleaner could free right now, found without deleting anything.
@@ -947,6 +995,28 @@ mod tests {
         let mut both = user("x", &["~/a/b"]);
         both.command = vec!["true".into()];
         assert!(both.validate().is_err());
+    }
+
+    #[test]
+    fn a_file_a_running_program_has_open_is_kept() {
+        let root = std::env::temp_dir().join(format!("mac-headroom-open-{}", now()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("in-use"), b"x").unwrap();
+        std::fs::write(root.join("idle"), b"x").unwrap();
+        // Held open by this test for as long as the handle lives.
+        let _held = std::fs::File::open(root.join("in-use")).unwrap();
+
+        let pattern = format!("{}/*", root.display());
+        let mut c = super::paths("t", "", "because", None, &[&pattern]);
+        c.skip_if_open = true;
+        let found = candidates(&c);
+        let kept: Vec<_> = found
+            .iter()
+            .filter(|(_, k)| k.is_some())
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(kept, vec!["in-use"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
