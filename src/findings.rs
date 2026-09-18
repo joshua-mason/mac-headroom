@@ -33,6 +33,21 @@ pub struct Findings {
     pub skipped_protected: bool,
 }
 
+/// Something the tool can do about a detection, for a caller that offers a
+/// button rather than a sentence. The work is an opt-in cleaner, so an action
+/// goes through the same dry run, the same skip-while-running check and the
+/// same audit log as everything else that deletes, and there is no second path
+/// through which this tool removes anything.
+#[derive(Serialize, Deserialize)]
+pub struct Action {
+    /// What a button should say.
+    pub label: String,
+    /// Run it with `clean --only <name> --yes`. Its size, whether an open app
+    /// blocks it and how it describes itself are the cleaner's own answers,
+    /// so a button and a dry run can never disagree.
+    pub cleaner: cleaners::Estimate,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Detection {
     pub id: String,
@@ -47,6 +62,52 @@ pub struct Detection {
     /// The largest individual items, where there are many.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub largest: Vec<(String, u64)>,
+    /// What can be done about this without leaving the app. `how` still says
+    /// what to do in words, because most of these have no action and never
+    /// will: the ones that are someone's own files, or that need a judgement
+    /// no tool should make for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<Action>,
+}
+
+/// Detections something can be done about, and the cleaner that does it.
+/// Deliberately short. A detection earns an action only when the work is
+/// rebuildable or re-downloadable, needs no sudo, and frees a figure the tool
+/// can stand behind afterwards. Docker is the instructive exclusion: pruning
+/// its build cache frees space inside a disk image that does not shrink, so a
+/// button would report a number the disk would not agree with.
+const ACTIONS: [(&str, &str, &str); 3] = [
+    ("claude-vm", "claude-vm-bundles", "Delete the sandbox image"),
+    (
+        "device-support",
+        "xcode-device-support",
+        "Delete the device support files",
+    ),
+    (
+        "simulators",
+        "simulators-unavailable",
+        "Delete simulators that cannot boot",
+    ),
+];
+
+/// Attaches each detection's action, measured the same way the clear list is.
+fn attach_actions(out: &mut [Detection]) {
+    let all = crate::config::all_cleaners().unwrap_or_default();
+    for d in out.iter_mut() {
+        for (detection, cleaner, label) in ACTIONS {
+            if d.id != detection {
+                continue;
+            }
+            // A cleaner switched off in the config is switched off here too.
+            // One list of what this Mac is willing to delete, not two.
+            if let Some(c) = cleaners::find(&all, cleaner).filter(|c| !c.disabled) {
+                d.actions.push(Action {
+                    label: label.into(),
+                    cleaner: cleaners::estimate(c),
+                });
+            }
+        }
+    }
 }
 
 fn path_file() -> PathBuf {
@@ -77,6 +138,7 @@ fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &
             how: how.into(),
             path: Some(path.display().to_string()),
             largest: vec![],
+            actions: vec![],
         });
     }
 }
@@ -171,6 +233,7 @@ fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: 
             .take(5)
             .map(|(p, b)| (p.display().to_string(), b))
             .collect(),
+        actions: vec![],
     });
 }
 
@@ -256,12 +319,14 @@ pub fn detections() -> Vec<Detection> {
                     how: "Check that your chats look right on your phone, quit WhatsApp, then run `mac-headroom clean --only whatsapp-orphans --yes`. Anything still on your phone downloads again if you scroll back.".into(),
                     path: None,
                     largest: vec![],
+                    actions: vec![],
                 });
             }
         }
     }
 
     out.sort_by_key(|d| std::cmp::Reverse(d.bytes));
+    attach_actions(&mut out);
     out
 }
 
@@ -278,5 +343,38 @@ pub fn gather() -> Findings {
         detections: detections(),
         full_disk_access: crate::util::full_disk_access(),
         skipped_protected: crate::util::skipping_protected(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A typo in ACTIONS would not fail to compile: it would silently leave a
+    /// detection with no button, which is the failure nobody notices.
+    #[test]
+    fn every_action_names_an_opt_in_built_in() {
+        let all = cleaners::builtins();
+        for (detection, cleaner, label) in ACTIONS {
+            let c = cleaners::find(&all, cleaner)
+                .unwrap_or_else(|| panic!("{detection}: there is no cleaner called {cleaner}"));
+            assert!(
+                c.opt_in,
+                "{cleaner} has to be opt in, or a plain clean would run it without being asked"
+            );
+            assert!(!label.is_empty(), "{cleaner}: a button needs words on it");
+        }
+    }
+
+    /// Every action is a deletion, so it answers to the same rule as any
+    /// cleaner: it says why it is safe.
+    #[test]
+    fn every_action_says_why_it_is_safe() {
+        let all = cleaners::builtins();
+        for (_, cleaner, _) in ACTIONS {
+            let c = cleaners::find(&all, cleaner).unwrap();
+            c.validate().unwrap_or_else(|e| panic!("{e}"));
+            assert!(c.why_safe.len() > 40, "{cleaner}: why_safe is too thin");
+        }
     }
 }

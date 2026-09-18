@@ -408,6 +408,12 @@ function renderLook() {
       <div class="top"><span class="title">${esc(x.title)}</span><span class="size">${h(x.bytes)}</span></div>
       <p>${rich(x.what)}</p>
       <p class="how">${rich(x.how)}</p>
+      ${(x.actions || []).map(a => {
+        const cmd = `mac-headroom clean --only ${a.cleaner.name} --yes`;
+        const size = a.cleaner.bytes != null ? ` · ${h(a.cleaner.bytes)}` : '';
+        const blocked = a.cleaner.blocked_by ? `<span class="chip warn">Quit ${esc(a.cleaner.blocked_by)} first</span>` : '';
+        return `<div class="cmdbox"><span class="cmd">${esc(cmd)}</span>${copyBtn(cmd)}<span class="quiet" style="margin:0">${esc(a.label)}${size}</span>${blocked}</div>`;
+      }).join('')}
       ${x.largest && x.largest.length ? `<details><summary class="quiet" style="display:list-item">Largest</summary><ul>${x.largest.map(([p, b]) => `<li>${esc(tilde(p))} <span class="muted">${h(b)}</span></li>`).join('')}</ul></details>` : ''}
       ${x.path ? `<p class="quiet" style="margin-top:4px">${esc(tilde(x.path))}</p>` : ''}
     </div>`).join('')}
