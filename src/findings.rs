@@ -118,8 +118,8 @@ type Sized = Vec<(PathBuf, u64)>;
 
 /// Dependency folders a project re-creates on install: node_modules, and
 /// Python virtual environments (recognised by their pyvenv.cfg).
-fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized) {
-    let (mut node, mut venv) = (Vec::new(), Vec::new());
+fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized) {
+    let (mut node, mut venv, mut trees) = (Vec::new(), Vec::new(), Vec::new());
     for root in roots {
         let mut it = walkdir::WalkDir::new(root)
             .max_depth(6)
@@ -136,6 +136,11 @@ fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized) {
             } else if name == "node_modules" {
                 node.push((e.path().to_path_buf(), disk_usage(e.path())));
                 it.skip_current_dir();
+            } else if name == "worktrees"
+                && e.path().parent().is_some_and(|p| p.ends_with(".claude"))
+            {
+                trees.push((e.path().to_path_buf(), disk_usage(e.path())));
+                it.skip_current_dir();
             } else if name == ".git" || name == "Library" || name == ".Trash" {
                 it.skip_current_dir();
             } else if e.path().join("pyvenv.cfg").is_file() {
@@ -144,7 +149,7 @@ fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized) {
             }
         }
     }
-    (node, venv)
+    (node, venv, trees)
 }
 
 fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: &str, how: &str) {
@@ -215,17 +220,29 @@ pub fn detections() -> Vec<Detection> {
         "Language models downloaded to run locally.",
         "Remove models you no longer use from LM Studio's My Models page.",
     );
+    fixed(&mut out, h.join("Library/Application Support/Claude/vm_bundles"), "claude-vm", "Claude Desktop's sandbox disk image",
+        "A virtual machine image Claude Desktop keeps so it can run code away from your own files. It is made once and grows as it is used.",
+        "If you do not use Claude Desktop, or never let it run code, quit it and delete the folder. It is built again the next time the sandbox is needed.");
+    fixed(&mut out, PathBuf::from("/System/Library/AssetsV2/com_apple_MobileAsset_iOSSimulatorRuntime"), "simulator-runtimes", "Installed iOS simulator runtimes",
+        "The iOS versions Xcode can simulate. Each one is a complete copy of iOS and is several gigabytes, whether or not you still build for it.",
+        "Run `xcrun simctl runtime list` to see them, then `xcrun simctl runtime delete <build>` for any you no longer build against. Xcode offers to download one again when you need it.");
+    fixed(&mut out, PathBuf::from("/Library/Developer/CoreSimulator/Caches"), "simulator-caches", "Simulator startup caches",
+        "Caches the simulator builds for each macOS version it has run under. Folders for macOS versions this Mac no longer runs are dead weight.",
+        "They are rebuilt on demand, so `sudo rm -rf /Library/Developer/CoreSimulator/Caches/*` costs nothing but a slower first simulator launch.");
     fixed(&mut out, h.join("Library/Application Support/MobileSync/Backup"), "iphone-backups", "iPhone and iPad backups",
         "Full backups of devices made on this Mac. They can be very large, and old ones are easy to forget.",
         "In Finder, select your device in the sidebar and choose Manage Backups to delete old ones.");
 
-    let (node, venv) = dependency_folders(&project_roots(&h));
+    let (node, venv, trees) = dependency_folders(&project_roots(&h));
     grouped(&mut out, node, "node-modules", "JavaScript project dependencies",
         "Each JavaScript project keeps a node_modules folder of the libraries it uses. They add up quickly across many projects.",
         "Delete node_modules in projects you are not working on. Running `npm install` in a project brings it back.");
     grouped(&mut out, venv, "python-venvs", "Python virtual environments",
         "Each Python project can have its own environment holding the libraries it uses.",
         "Delete environments for projects you are not working on. They can be recreated from the project's requirements.");
+    grouped(&mut out, trees, "agent-worktrees", "Working copies left by coding agents",
+        "A coding agent that works on several things at once gives each one its own checkout of the project, under the project's .claude folder. They are rarely cleared up afterwards.",
+        "These are git working copies, so check for uncommitted work first. In the project, `git worktree list` shows them and `git worktree remove <path>` removes one properly. Deleting the folder by hand leaves git holding a reference to it.");
 
     if !crate::util::skipping_protected() && !is_running("WhatsApp") {
         if let Ok(orphans) = crate::orphans::find(&crate::orphans::WHATSAPP) {

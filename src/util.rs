@@ -169,9 +169,21 @@ pub fn tilde(p: &Path) -> String {
 /// overcount sparse files (Docker.raw) and APFS clones, which is exactly the
 /// mistake that makes "reclaimed" numbers untrustworthy.
 pub fn disk_usage(path: &Path) -> u64 {
+    // One filesystem only. What is mounted under a directory is not that
+    // directory's space: an iOS simulator runtime is mounted read-only under
+    // /Library/Developer/CoreSimulator/Volumes, and walking into it would
+    // report the same 8 GB a second time, on top of the asset it is mounted
+    // from. Overcounting is the failure this tool exists to avoid.
+    let root_dev = std::fs::symlink_metadata(path).map(|m| m.dev()).ok();
     walkdir::WalkDir::new(path)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            !e.file_type().is_dir()
+                || e.metadata()
+                    .map(|m| Some(m.dev()) == root_dev)
+                    .unwrap_or(true)
+        })
         .filter_map(Result::ok)
         .filter_map(|e| e.metadata().ok())
         .map(|md| md.blocks() * 512)

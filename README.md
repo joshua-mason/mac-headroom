@@ -112,7 +112,7 @@ safe, since every built-in has to explain that honestly.
 ## Your own cleaners
 
 `~/.config/mac-headroom/config.toml` adds cleaners with the same fields the
-built-ins have, plus two filters for the leaks that need judgement:
+built-ins have, plus the filters for the leaks that need judgement:
 
 ```toml
 [[cleaner]]
@@ -130,8 +130,22 @@ why_safe = "Untouched for a week means the job is long done."
 paths = ["~/.claude/jobs/*/tmp"]
 older_than_days = 7          # only when nothing inside was modified for N days
 
+[[cleaner]]
+name = "myeditor-extensions"
+summary = "Superseded copies of MyEditor extensions"
+why_safe = "MyEditor runs the newest copy of each. Older ones re-download if needed."
+paths = ["~/.myeditor/extensions/*"]
+keep_newest = 1
+group_by = "name-before-version"   # versions of one thing compete only with each other
+
 disable = ["spotify-cache"]  # built-ins to leave out of a plain `clean`
 ```
+
+`group_by` matters wherever a tool keeps every version of every component in
+one folder. Without it, `keep_newest = 1` over such a folder keeps a single
+component and deletes every other one, because each match's only rivals are its
+neighbours in the directory. VS Code is the case that prompted it, and the
+built-in `vscode-old-extensions` already covers that one.
 
 Paths must start with `~/` and name a directory under home plus something
 inside it, so `~/Library` or `~/*` are refused. `why_safe` is mandatory. A

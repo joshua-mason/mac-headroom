@@ -236,6 +236,9 @@ const day = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'shor
 const ago = t => { const s = Math.max(0, D.generated_at - t), d = s / 86400 | 0, hh = s % 86400 / 3600 | 0, m = s % 3600 / 60 | 0;
   return d ? `${d}d ${hh}h ago` : hh ? `${hh}h ${m}m ago` : `${m}m ago`; };
 const tilde = p => p.startsWith(D.home) ? '~' + p.slice(D.home.length) : p;
+// A list inside a sentence: "A", "A and B", "A, B and C". Joining three or
+// more with "and" alone reads as a chain rather than a list.
+const listOf = xs => xs.length < 3 ? xs.join(' and ') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const $ = id => document.getElementById(id);
 const tip = $('tip');
@@ -389,7 +392,7 @@ function renderFreeable() {
         <div class="size">${e.upper_bound ? '<small>up to</small>' : ''}${h(e.bytes)}</div>
         <div><span class="title">${esc(e.title)}</span>${e.blocked_by ? `<span class="chip warn">Quit ${esc(e.blocked_by)} first</span>` : ''}<p>${esc(e.plain)}</p></div>
       </div>`).join('')}</div>` : ''}
-    ${items.length ? `<div class="cmdbox"><span class="cmd">mac-headroom clean --yes</span>${copyBtn('mac-headroom clean --yes')}<span class="quiet" style="margin:0">Removes all of the above.${blocked.length ? ` Quit ${blocked.map(esc).join(' and ')} first, or those are skipped.` : ''}</span></div>
+    ${items.length ? `<div class="cmdbox"><span class="cmd">mac-headroom clean --yes</span>${copyBtn('mac-headroom clean --yes')}<span class="quiet" style="margin:0">Removes all of the above.${blocked.length ? ` Quit ${listOf(blocked.map(esc))} first, or those are skipped.` : ''}</span></div>
     <p class="quiet">Want to see every file first? <code>mac-headroom clean</code> lists exactly what would go, without removing anything.</p>` : ''}
     ${empty.length ? `<p class="quiet">Already clean: ${empty.map(e => esc(e.title)).join(', ')}.</p>` : ''}`;
 }
