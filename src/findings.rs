@@ -197,6 +197,33 @@ fn worktree_items(dirs: &[PathBuf]) -> Vec<Item> {
     out
 }
 
+/// After a clean, re-measures the detections whose action just ran. Without
+/// this the saved findings go on showing the size from before, so an action
+/// that worked looks like one that did nothing. Only the detections touched
+/// are measured again: the full set includes a walk of every project folder,
+/// which is a scan's job and too slow to hang off a button.
+pub fn refresh_after(ran: &[String], saved: &mut Findings) {
+    let all = crate::config::all_cleaners().unwrap_or_default();
+    for d in saved.detections.iter_mut() {
+        if !d.actions.iter().any(|a| ran.contains(&a.cleaner.name)) {
+            continue;
+        }
+        if let Some(path) = &d.path {
+            d.bytes = disk_usage(Path::new(path));
+        }
+        for a in d.actions.iter_mut() {
+            if let Some(c) = cleaners::find(&all, &a.cleaner.name) {
+                a.cleaner = cleaners::estimate(c);
+            }
+        }
+    }
+    // The same bar a scan applies: what is no longer large is no longer listed.
+    saved.detections.retain(|d| {
+        d.bytes >= WORTH_A_LOOK || !d.actions.iter().any(|a| ran.contains(&a.cleaner.name))
+    });
+    saved.detections.sort_by_key(|d| std::cmp::Reverse(d.bytes));
+}
+
 /// Attaches each detection's action, measured the same way the clear list is.
 fn attach_actions(out: &mut [Detection]) {
     let all = crate::config::all_cleaners().unwrap_or_default();
@@ -479,6 +506,56 @@ mod tests {
             );
             assert!(!label.is_empty(), "{cleaner}: a button needs words on it");
         }
+    }
+
+    fn detection(id: &str, path: &Path, cleaner: &str) -> Detection {
+        Detection {
+            id: id.into(),
+            title: id.into(),
+            bytes: 1_000_000_000,
+            what: String::new(),
+            how: String::new(),
+            path: Some(path.display().to_string()),
+            largest: vec![],
+            actions: vec![Action {
+                label: "Delete".into(),
+                cleaner: cleaners::Estimate {
+                    name: cleaner.into(),
+                    title: String::new(),
+                    plain: String::new(),
+                    bytes: Some(1_000_000_000),
+                    upper_bound: false,
+                    blocked_by: None,
+                    note: None,
+                    opt_in: true,
+                },
+            }],
+            items: vec![],
+        }
+    }
+
+    #[test]
+    fn an_action_that_ran_stops_being_listed_at_its_old_size() {
+        let root = std::env::temp_dir().join(format!("mac-headroom-ra-{}", now()));
+        fs::create_dir_all(&root).unwrap();
+        let mut saved = Findings {
+            at: 0,
+            reclaimable: vec![],
+            detections: vec![
+                detection("claude-vm", &root, "claude-vm-bundles"),
+                detection("device-support", &root, "xcode-device-support"),
+            ],
+            full_disk_access: None,
+            skipped_protected: false,
+        };
+        // The folder is empty now, as it would be after the action ran.
+        refresh_after(&["claude-vm-bundles".to_string()], &mut saved);
+        let ids: Vec<&str> = saved.detections.iter().map(|d| d.id.as_str()).collect();
+        // The one that ran is gone. The other was not measured again, and
+        // keeps the figure the last scan gave it.
+        assert_eq!(ids, vec!["device-support"]);
+        assert_eq!(saved.detections[0].bytes, 1_000_000_000);
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn git(dir: &Path, args: &[&str]) {
