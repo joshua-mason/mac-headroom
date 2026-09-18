@@ -2,7 +2,3 @@
 .claude/
 .DS_Store
 out/
-
-# the macOS app prototype
-app/.build/
-app/build/

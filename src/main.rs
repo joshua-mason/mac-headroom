@@ -394,7 +394,7 @@ struct Overview {
     cleaners_enabled: Vec<String>,
     schedule: schedule::Status,
     state: StateSummary,
-    /// The last scan's findings, so anything showing status (the app's menu bar
+    /// The last scan's findings, so anything showing status (a menu bar
     /// item, an agent) can say what is freeable without an 80-second rescan.
     #[serde(skip_serializing_if = "Option::is_none")]
     findings: Option<findings::Findings>,
