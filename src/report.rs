@@ -220,7 +220,7 @@ pub fn gather() -> Data {
         schedule: timed("schedule status", crate::schedule::status),
         audit: timed("audit", || audit(500)),
         last_run_log: timed("last run log", last_run_log),
-        findings: timed("findings", crate::findings::load),
+        findings: timed("findings", crate::findings::load_current),
         runs: timed("runs", runs),
     }
 }

@@ -258,6 +258,31 @@ pub fn load() -> Option<Findings> {
     serde_json::from_str(&fs::read_to_string(path_file()).ok()?).ok()
 }
 
+/// The saved findings, with the one part of them that goes stale in seconds
+/// checked again: which apps are open. Sizes are a scan's measurement and stay
+/// as saved, but "quit Chrome first" is a fact about this moment. Read from the
+/// file, it told someone who had already quit the app to quit it, and anything
+/// that acts on the list left that cleaner out of a clear it could have run.
+/// Costs a process lookup per cleaner that names an app, and writes nothing.
+pub fn load_current() -> Option<Findings> {
+    let mut f = load()?;
+    let all = crate::config::all_cleaners().unwrap_or_default();
+    let blocker = |name: &str| {
+        cleaners::find(&all, name)
+            .and_then(|c| c.skip_if_running.clone())
+            .filter(|app| is_running(app))
+    };
+    for e in f.reclaimable.iter_mut() {
+        e.blocked_by = blocker(&e.name);
+    }
+    for d in f.detections.iter_mut() {
+        for a in d.actions.iter_mut() {
+            a.cleaner.blocked_by = blocker(&a.cleaner.name);
+        }
+    }
+    Some(f)
+}
+
 fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &str, how: &str) {
     if crate::util::skip_protected(&path) || !path.exists() {
         return;
