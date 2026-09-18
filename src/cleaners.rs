@@ -284,6 +284,53 @@ pub fn builtins() -> Vec<Cleaner> {
             "Go build cache",
             "Compiled pieces Go keeps so builds are quicker. Go rebuilds them when it needs them.",
         ),
+        // Actions on things under "worth a look". Opt in, so a plain `clean`
+        // never touches them: each is a deliberate choice someone makes once,
+        // not part of a weekly routine. Being cleaners is what gives them the
+        // dry run, the skip-while-running check and the audit log for free.
+        Cleaner {
+            opt_in: true,
+            ..paths(
+                "claude-vm-bundles",
+                "Claude Desktop's sandbox virtual machine image",
+                "The disk image Claude Desktop's sandbox runs inside, rebuilt the next time the sandbox is used. Anything sitting in an unfinished sandbox session goes with it, which is why this is offered as a deliberate action and never as part of a routine clean. Skipped while Claude is open, since the image is then in use.",
+                Some("Claude"),
+                &["~/Library/Application Support/Claude/vm_bundles/*"],
+            )
+        }
+        .with_plain(
+            "Claude Desktop's sandbox image",
+            "The private disk Claude Desktop uses to run code away from your own files. It makes a new one the next time it needs one.",
+        ),
+        Cleaner {
+            opt_in: true,
+            ..paths(
+                "xcode-device-support",
+                "Debug symbols Xcode copied from connected iPhones and iPads",
+                "Xcode copies these from a device the first time it sees that iOS version, and copies them again if it needs them. Nothing in them is yours. Skipped while Xcode is open.",
+                Some("Xcode"),
+                &["~/Library/Developer/Xcode/iOS DeviceSupport/*"],
+            )
+        }
+        .with_plain(
+            "Xcode device support files",
+            "Debugging files Xcode copied from iPhones you have plugged in. It copies them again if it needs them.",
+        ),
+        Cleaner {
+            opt_in: true,
+            skip_if_running: Some("Xcode".into()),
+            ..cmd(
+                "simulators-unavailable",
+                "Simulators whose iOS version is no longer installed",
+                "simctl's own delete of unavailable devices: simulators whose runtime this Mac no longer has, so nothing can boot them. Simulators for the runtimes you do have are untouched, and Xcode makes fresh ones on demand. Skipped while Xcode is open.",
+                &["xcrun", "simctl", "delete", "unavailable"],
+                &[],
+            )
+        }
+        .with_plain(
+            "Simulators that cannot be booted",
+            "Simulated devices left behind for iOS versions this Mac no longer has installed.",
+        ),
         orphan_cleaner(
             "whatsapp-orphans",
             "WhatsApp media it no longer has any record of",
