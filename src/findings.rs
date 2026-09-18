@@ -428,6 +428,30 @@ pub fn detections() -> Vec<Detection> {
     fixed(&mut out, PathBuf::from("/Library/Developer/CoreSimulator/Caches"), "simulator-caches", "Simulator startup caches",
         "Caches the simulator builds for each macOS version it has run under. Folders for macOS versions this Mac no longer runs are dead weight.",
         "They are rebuilt on demand, so `sudo rm -rf /Library/Developer/CoreSimulator/Caches/*` costs nothing but a slower first simulator launch.");
+    // GarageBand ships on every Mac, and opening it once downloads a sound
+    // library most people never think about again. It is spread over three
+    // folders, so it is measured as one thing rather than three small ones.
+    let music: u64 = [
+        "/Library/Application Support/GarageBand",
+        "/Library/Application Support/Logic",
+        "/Library/Audio/Apple Loops",
+    ]
+    .iter()
+    .map(|p| disk_usage(Path::new(p)))
+    .sum();
+    if music >= WORTH_A_LOOK {
+        out.push(Detection {
+            id: "music-creation".into(),
+            title: "GarageBand's sound library".into(),
+            bytes: music,
+            what: "Instruments and loops GarageBand downloaded, shared with Logic. They stay even if you only opened GarageBand once.".into(),
+            how: "Open System Settings > General > Storage, choose Music Creation, and remove the sound library there, which clears it properly. GarageBand offers to download it again from its Sound Library menu.".into(),
+            path: None,
+            largest: vec![],
+            actions: vec![],
+            items: vec![],
+        });
+    }
     fixed(&mut out, h.join("Library/Application Support/MobileSync/Backup"), "iphone-backups", "iPhone and iPad backups",
         "Full backups of devices made on this Mac. They can be very large, and old ones are easy to forget.",
         "In Finder, select your device in the sidebar and choose Manage Backups to delete old ones.");
