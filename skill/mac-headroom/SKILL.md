@@ -42,7 +42,9 @@ When a growth report or a manual hunt finds a recurring leak, the durable fix is
 cleaner in `~/.config/mac-headroom/config.toml` (see `mac-headroom config init` for
 the format). Write the `why_safe` line to be honest about what is lost. Use
 `keep_newest` for build caches that leak one copy per build, and `older_than_days`
-for scratch that is safe once a job has finished. Then run `mac-headroom config check`
+for scratch that is safe once a job has finished. Add
+`group_by = "name-before-version"` when one folder holds every version of every
+component, or `keep_newest` will keep a single component and delete the rest. Then run `mac-headroom config check`
 and a dry run of `clean --only <name>`, and show the user what would be deleted and
 what was kept before suggesting `--yes`.
 

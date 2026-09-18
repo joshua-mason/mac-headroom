@@ -209,6 +209,19 @@ alert_below_percent = 5
 # keep_newest = 1
 # skip_if_running = "MyApp"
 
+# group_by = "name-before-version": when one folder holds every version of
+# every component, keep_newest on its own would keep one folder and delete all
+# the rest. This makes the versions of one thing compete only with each other.
+#
+# [[cleaner]]
+# name = "myeditor-extensions"
+# summary = "Superseded copies of MyEditor extensions"
+# why_safe = "MyEditor runs the newest copy of each extension. Older ones are leftovers and re-download if ever needed."
+# paths = ["~/.myeditor/extensions/*"]
+# keep_newest = 1
+# group_by = "name-before-version"
+# skip_if_running = "MyEditor"
+
 # older_than_days = N: only delete a match when nothing inside it was modified
 # in the last N days. For scratch space that is safe once a job has finished.
 #
@@ -392,7 +405,7 @@ mod tests {
             }
         }
         let cfg: Config = toml::from_str(&blocks).unwrap_or_else(|e| panic!("{e}\n{blocks}"));
-        assert_eq!(cfg.cleaners.len(), 4);
+        assert_eq!(cfg.cleaners.len(), 5);
         assert!(
             validate(&cfg).problems.is_empty(),
             "{:?}",

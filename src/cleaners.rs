@@ -13,6 +13,17 @@ pub enum Source {
     Config,
 }
 
+/// How `keep_newest` decides which matches are copies of the same thing.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+#[serde(rename_all = "kebab-case")]
+pub enum GroupBy {
+    /// The name with a trailing version cut off, so that
+    /// `anthropic.claude-code-2.1.276-darwin-arm64` and the five older folders
+    /// beside it are six copies of one extension rather than six unrelated
+    /// things. A name with no version in it is left in a group of its own.
+    NameBeforeVersion,
+}
+
 /// One thing that can be cleared. Built-ins are constructed in `builtins()`;
 /// users add their own in the config file with the same fields.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -35,6 +46,11 @@ pub struct Cleaner {
     /// In each directory, keep the N most recently modified matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_newest: Option<usize>,
+    /// Narrows what `keep_newest` compares. Without it, matches compete with
+    /// everything else in their directory, which is wrong for any tool that
+    /// puts every version of every component side by side in one folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<GroupBy>,
     /// Only delete a match when nothing inside it was modified in the last N days.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_than_days: Option<u64>,
@@ -75,6 +91,7 @@ fn paths(name: &str, summary: &str, why_safe: &str, skip: Option<&str>, globs: &
         paths: globs.iter().map(|s| s.to_string()).collect(),
         command: vec![],
         keep_newest: None,
+        group_by: None,
         older_than_days: None,
         source: Source::Builtin,
         disabled: false,
@@ -186,6 +203,43 @@ pub fn builtins() -> Vec<Cleaner> {
             "Chrome's web cache",
             "Images and files Chrome saved to load websites faster. Your bookmarks, passwords, history and logins are not touched.",
         ),
+        paths(
+            "terraform-plugins",
+            "Terraform's shared provider plugin cache",
+            "A download cache kept so repeated `terraform init` runs are fast. A project that used it may hold links into it, so the next init in that project downloads again. Nothing is lost but the download.",
+            None,
+            &["~/.terraform.d/plugin-cache/*"],
+        )
+        .with_plain(
+            "Downloaded Terraform providers",
+            "Copies of the plugins Terraform downloads so it can talk to cloud services. It fetches them again the next time a project needs one.",
+        ),
+        paths(
+            "playwright-browsers",
+            "Browsers the Playwright test tool downloaded",
+            "Playwright keeps its own copies of Chromium, Firefox and WebKit, separate from any browser you use. `npx playwright install` downloads them again.",
+            None,
+            &["~/Library/Caches/ms-playwright/*"],
+        )
+        .with_plain(
+            "Test browsers",
+            "Private copies of browsers that the Playwright testing tool downloads. It downloads them again when a test needs one.",
+        ),
+        Cleaner {
+            keep_newest: Some(1),
+            group_by: Some(GroupBy::NameBeforeVersion),
+            ..paths(
+                "vscode-old-extensions",
+                "Superseded copies of VS Code extensions",
+                "VS Code installs each extension update beside the last and runs the newest, so only the newest of each is kept here. An extension that is ever needed again is re-downloaded. Skipped while VS Code is open.",
+                Some("Code"),
+                &["~/.vscode/extensions/*"],
+            )
+        }
+        .with_plain(
+            "Old versions of VS Code extensions",
+            "VS Code keeps the previous copy of an add-on after updating it. Only the newest of each is used.",
+        ),
         cmd(
             "npm-cache",
             "npm package cache",
@@ -288,6 +342,11 @@ impl Cleaner {
         if self.command.is_empty() && !self.measure.is_empty() {
             return Err(format!("{n}: measure only applies to a command cleaner"));
         }
+        if self.group_by.is_some() && self.keep_newest.is_none() {
+            return Err(format!(
+                "{n}: group_by says which matches compete, so it needs keep_newest"
+            ));
+        }
         if self.paths.is_empty() && (self.keep_newest.is_some() || self.older_than_days.is_some()) {
             return Err(format!(
                 "{n}: keep_newest and older_than_days only apply to paths"
@@ -387,6 +446,18 @@ fn own_mtime(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// The part of a name before a trailing version: the `-` that is followed by a
+/// digit is where a version starts, and everything from there is the version
+/// and whatever the tool appends to it (`-darwin-arm64` and the like).
+/// None when there is no version to cut, which leaves that match in a group of
+/// its own. A thing we cannot classify never loses a comparison it was not in.
+fn name_before_version(name: &str) -> Option<&str> {
+    let b = name.as_bytes();
+    (1..b.len().saturating_sub(1))
+        .find(|&i| b[i] == b'-' && b[i + 1].is_ascii_digit())
+        .map(|i| &name[..i])
+}
+
 /// Every glob match, paired with the reason a filter kept it (if any). Sorted.
 fn candidates(c: &Cleaner) -> Vec<(PathBuf, Option<String>)> {
     let mut paths: Vec<PathBuf> = c
@@ -410,20 +481,33 @@ fn candidates(c: &Cleaner) -> Vec<(PathBuf, Option<String>)> {
     }
 
     if let Some(n) = c.keep_newest {
-        let mut by_parent: BTreeMap<PathBuf, Vec<(usize, u64)>> = BTreeMap::new();
+        // Grouped by directory, and by name as well when the cleaner says the
+        // directory holds many versions of many things.
+        let mut groups: BTreeMap<(PathBuf, String), Vec<(usize, u64)>> = BTreeMap::new();
         for (i, (p, kept)) in out.iter().enumerate() {
             if kept.is_none() {
                 let parent = p.parent().map(Path::to_path_buf).unwrap_or_default();
-                by_parent.entry(parent).or_default().push((i, own_mtime(p)));
+                let key = match c.group_by {
+                    None => String::new(),
+                    Some(GroupBy::NameBeforeVersion) => {
+                        let name = p.file_name().unwrap_or_default().to_string_lossy();
+                        name_before_version(&name).unwrap_or(&name).to_string()
+                    }
+                };
+                groups
+                    .entry((parent, key))
+                    .or_default()
+                    .push((i, own_mtime(p)));
             }
         }
-        for group in by_parent.values_mut() {
+        for ((_, key), group) in groups.iter_mut() {
             group.sort_by_key(|&(_, mtime)| std::cmp::Reverse(mtime));
             for &(i, _) in group.iter().take(n) {
-                out[i].1 = Some(if n == 1 {
-                    "newest in its directory".to_string()
-                } else {
-                    format!("among the {n} newest in its directory")
+                out[i].1 = Some(match (c.group_by.is_some(), n) {
+                    (false, 1) => "newest in its directory".to_string(),
+                    (false, _) => format!("among the {n} newest in its directory"),
+                    (true, 1) => format!("newest copy of {key}"),
+                    (true, _) => format!("among the {n} newest copies of {key}"),
                 });
             }
         }
@@ -789,6 +873,88 @@ mod tests {
         let mut both = user("x", &["~/a/b"]);
         both.command = vec!["true".into()];
         assert!(both.validate().is_err());
+    }
+
+    #[test]
+    fn name_before_version_cuts_at_the_version() {
+        assert_eq!(
+            name_before_version("anthropic.claude-code-2.1.276-darwin-arm64"),
+            Some("anthropic.claude-code")
+        );
+        assert_eq!(
+            name_before_version("ms-dotnettools.csharp-2.140.9-darwin-arm64"),
+            Some("ms-dotnettools.csharp")
+        );
+        // Nothing to cut: these stay in a group of their own rather than
+        // becoming rivals of everything else in the folder.
+        assert_eq!(name_before_version("extensions.json"), None);
+        assert_eq!(name_before_version(".obsolete"), None);
+    }
+
+    #[test]
+    fn group_by_keeps_the_newest_of_each_thing_not_of_the_folder() {
+        let root = std::env::temp_dir().join(format!("mac-headroom-gb-{}", now()));
+        // One folder holding two versions of two extensions, the way VS Code
+        // stores them, plus a file that has no version at all.
+        for name in [
+            "pub.alpha-1.0.0-darwin-arm64",
+            "pub.alpha-2.0.0-darwin-arm64",
+            "pub.beta-1.0.0-darwin-arm64",
+            "pub.beta-2.0.0-darwin-arm64",
+        ] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("extensions.json"), b"[]").unwrap();
+        for old in [
+            "pub.alpha-1.0.0-darwin-arm64",
+            "pub.beta-1.0.0-darwin-arm64",
+        ] {
+            std::process::Command::new("touch")
+                .args(["-t", "202001010000", root.join(old).to_str().unwrap()])
+                .status()
+                .unwrap();
+        }
+
+        let pattern = format!("{}/*", root.display());
+        let mut c = super::paths("t", "", "because", None, &[&pattern]);
+        c.keep_newest = Some(1);
+        c.group_by = Some(GroupBy::NameBeforeVersion);
+        let found = candidates(&c);
+        let mut kept: Vec<String> = found
+            .iter()
+            .filter(|(_, k)| k.is_some())
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        kept.sort();
+        // The newest of each extension, and the unversioned file, which is
+        // never something's older copy.
+        assert_eq!(
+            kept,
+            vec![
+                "extensions.json",
+                "pub.alpha-2.0.0-darwin-arm64",
+                "pub.beta-2.0.0-darwin-arm64"
+            ]
+        );
+
+        // Without the grouping the same cleaner would keep one folder and
+        // delete the other three, which is the bug this field exists to stop.
+        c.group_by = None;
+        assert_eq!(
+            candidates(&c).iter().filter(|(_, k)| k.is_some()).count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn group_by_needs_keep_newest() {
+        let mut c = user("x", &["~/a/b"]);
+        c.group_by = Some(GroupBy::NameBeforeVersion);
+        assert!(c.validate().is_err());
+        c.keep_newest = Some(1);
+        assert!(c.validate().is_ok());
     }
 
     #[test]
