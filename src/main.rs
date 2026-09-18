@@ -548,6 +548,8 @@ pub fn run_clean(json: bool, apply: bool, only: &[String]) -> CleanReport {
                 .filter(|c| !c.disabled && !c.opt_in)
                 .map(cleaners::estimate)
                 .collect();
+            let ran: Vec<String> = report.cleaners.iter().map(|o| o.name.clone()).collect();
+            findings::refresh_after(&ran, &mut saved);
             findings::save(&saved);
         }
     }
