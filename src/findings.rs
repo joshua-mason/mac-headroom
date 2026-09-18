@@ -48,6 +48,22 @@ pub struct Action {
     pub cleaner: cleaners::Estimate,
 }
 
+/// One thing inside a detection that can be judged on its own, for the
+/// detections where "some of these are fine to remove" is the honest answer.
+#[derive(Serialize, Deserialize)]
+pub struct Item {
+    pub path: String,
+    pub bytes: u64,
+    /// True only when removing it would lose nothing, and that was checked
+    /// rather than assumed. Anything that could not be checked is not safe.
+    pub safe: bool,
+    /// What was found, in words.
+    pub note: String,
+    /// The command that removes it properly. Only given when `safe`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub command: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Detection {
     pub id: String,
@@ -68,6 +84,9 @@ pub struct Detection {
     /// no tool should make for them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
+    /// The individual things found, where each can be judged separately.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Item>,
 }
 
 /// Detections something can be done about, and the cleaner that does it.
@@ -89,6 +108,94 @@ const ACTIONS: [(&str, &str, &str); 3] = [
         "Delete simulators that cannot boot",
     ),
 ];
+
+fn shell_quote(p: &Path) -> String {
+    format!("'{}'", p.display().to_string().replace('\'', "'\\''"))
+}
+
+/// Each working copy under a project's `.claude/worktrees`, with whether
+/// removing it would lose anything. A working copy is safe only when git says
+/// so: nothing uncommitted, and no commit that exists nowhere but here. A
+/// folder git cannot answer for is reported as unchecked, never as safe,
+/// because an empty answer from a failed command looks exactly like a clean one.
+fn worktree_items(dirs: &[PathBuf]) -> Vec<Item> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        // <repo>/.claude/worktrees
+        let Some(repo) = dir.parent().and_then(Path::parent) else {
+            continue;
+        };
+        let Ok(children) = fs::read_dir(dir) else {
+            continue;
+        };
+        for wt in children.filter_map(Result::ok).map(|e| e.path()) {
+            if !wt.is_dir() {
+                continue;
+            }
+            let bytes = disk_usage(&wt);
+            let p = wt.to_string_lossy().into_owned();
+            let git = |args: &[&str]| {
+                let mut a = vec!["-C", p.as_str()];
+                a.extend_from_slice(args);
+                crate::util::stdout_of("git", &a)
+            };
+            // The folder has to be the root of its own working copy. Asking
+            // only "is this inside a work tree" is answered yes by any plain
+            // folder in the project, on behalf of the project around it.
+            let top = git(&["rev-parse", "--show-toplevel"]);
+            let checked = !top.trim().is_empty()
+                && fs::canonicalize(top.trim()).ok() == fs::canonicalize(&wt).ok();
+            let dirty = git(&["status", "--porcelain"]).lines().count();
+            let unpushed = git(&["log", "--oneline", "HEAD", "--not", "--remotes"])
+                .lines()
+                .count();
+            let touched = fs::metadata(&wt)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| crate::util::ago(d.as_secs()))
+                .unwrap_or_else(|| "at an unknown time".into());
+            let safe = checked && dirty == 0 && unpushed == 0;
+            let note = if !checked {
+                "git could not check this one, so it is left to you".to_string()
+            } else if safe {
+                format!("nothing uncommitted and nothing unpushed, last touched {touched}")
+            } else {
+                let mut parts = Vec::new();
+                if dirty > 0 {
+                    parts.push(format!(
+                        "{dirty} uncommitted file{}",
+                        if dirty == 1 { "" } else { "s" }
+                    ));
+                }
+                if unpushed > 0 {
+                    parts.push(format!(
+                        "{unpushed} commit{} on no remote",
+                        if unpushed == 1 { "" } else { "s" }
+                    ));
+                }
+                format!("{}, last touched {touched}", parts.join(" and "))
+            };
+            out.push(Item {
+                path: p.clone(),
+                bytes,
+                safe,
+                note,
+                command: if safe {
+                    format!(
+                        "git -C {} worktree remove {}",
+                        shell_quote(repo),
+                        shell_quote(&wt)
+                    )
+                } else {
+                    String::new()
+                },
+            });
+        }
+    }
+    out.sort_by_key(|i| std::cmp::Reverse(i.bytes));
+    out
+}
 
 /// Attaches each detection's action, measured the same way the clear list is.
 fn attach_actions(out: &mut [Detection]) {
@@ -139,6 +246,7 @@ fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &
             path: Some(path.display().to_string()),
             largest: vec![],
             actions: vec![],
+            items: vec![],
         });
     }
 }
@@ -234,6 +342,7 @@ fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: 
             .map(|(p, b)| (p.display().to_string(), b))
             .collect(),
         actions: vec![],
+        items: vec![],
     });
 }
 
@@ -297,6 +406,7 @@ pub fn detections() -> Vec<Detection> {
         "In Finder, select your device in the sidebar and choose Manage Backups to delete old ones.");
 
     let (node, venv, trees) = dependency_folders(&project_roots(&h));
+    let trees_found: Vec<PathBuf> = trees.iter().map(|(p, _)| p.clone()).collect();
     grouped(&mut out, node, "node-modules", "JavaScript project dependencies",
         "Each JavaScript project keeps a node_modules folder of the libraries it uses. They add up quickly across many projects.",
         "Delete node_modules in projects you are not working on. Running `npm install` in a project brings it back.");
@@ -306,6 +416,10 @@ pub fn detections() -> Vec<Detection> {
     grouped(&mut out, trees, "agent-worktrees", "Working copies left by coding agents",
         "A coding agent that works on several things at once gives each one its own checkout of the project, under the project's .claude folder. They are rarely cleared up afterwards.",
         "These are git working copies, so check for uncommitted work first. In the project, `git worktree list` shows them and `git worktree remove <path>` removes one properly. Deleting the folder by hand leaves git holding a reference to it.");
+
+    if let Some(d) = out.iter_mut().find(|d| d.id == "agent-worktrees") {
+        d.items = worktree_items(&trees_found);
+    }
 
     if !crate::util::skipping_protected() && !is_running("WhatsApp") {
         if let Ok(orphans) = crate::orphans::find(&crate::orphans::WHATSAPP) {
@@ -320,6 +434,7 @@ pub fn detections() -> Vec<Detection> {
                     path: None,
                     largest: vec![],
                     actions: vec![],
+            items: vec![],
                 });
             }
         }
@@ -364,6 +479,84 @@ mod tests {
             );
             assert!(!label.is_empty(), "{cleaner}: a button needs words on it");
         }
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(ok, "git {args:?} failed in {}", dir.display());
+    }
+
+    #[test]
+    fn a_worktree_is_safe_only_when_git_says_nothing_would_be_lost() {
+        let root = std::env::temp_dir().join(format!("mac-headroom-wt-{}", now()));
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        git(&root, &["init", "-q", "--bare", "remote.git"]);
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join("f"), "x").unwrap();
+        git(&repo, &["add", "f"]);
+        git(&repo, &["commit", "-q", "-m", "one"]);
+        git(&repo, &["remote", "add", "origin", "../remote.git"]);
+        git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+        git(&repo, &["fetch", "-q", "origin"]);
+        let trees = repo.join(".claude/worktrees");
+        fs::create_dir_all(&trees).unwrap();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "clean",
+                ".claude/worktrees/clean",
+            ],
+        );
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "dirty",
+                ".claude/worktrees/dirty",
+            ],
+        );
+        fs::write(trees.join("dirty/new"), "y").unwrap();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "ahead",
+                ".claude/worktrees/ahead",
+            ],
+        );
+        fs::write(trees.join("ahead/g"), "z").unwrap();
+        git(&trees.join("ahead"), &["add", "g"]);
+        git(&trees.join("ahead"), &["commit", "-q", "-m", "only here"]);
+        // Not a working copy at all. A failed git call returns nothing, which
+        // must never be read as "nothing to lose".
+        fs::create_dir_all(trees.join("notgit")).unwrap();
+
+        let items = worktree_items(std::slice::from_ref(&trees));
+        let by = |n: &str| items.iter().find(|i| i.path.ends_with(n)).unwrap();
+        assert!(by("clean").safe, "{}", by("clean").note);
+        assert!(by("clean").command.contains("worktree remove"));
+        assert!(!by("dirty").safe && by("dirty").note.contains("1 uncommitted file"));
+        assert!(!by("ahead").safe && by("ahead").note.contains("1 commit on no remote"));
+        assert!(!by("notgit").safe && by("notgit").command.is_empty());
+        assert!(by("dirty").command.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Every action is a deletion, so it answers to the same rule as any
