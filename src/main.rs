@@ -437,7 +437,7 @@ fn overview() -> Overview {
         .map(|rd| rd.flatten().count())
         .unwrap_or(0);
     Overview {
-        findings: findings::load(),
+        findings: findings::load_current(),
         full_disk_access: util::full_disk_access(),
         disk: diag::disk().map(|d| DiskNow {
             used: d.used,

@@ -823,6 +823,28 @@ pub fn run(c: &Cleaner, apply: bool) -> Outcome {
     out
 }
 
+/// The one-line form used when there are too many targets to list. It counts
+/// what goes, not what matched: a target a filter kept is still in `targets`,
+/// with the reason, and calling those removed would overstate the clean.
+fn summary_line(verb: &str, o: &Outcome) -> String {
+    let kept = o.targets.iter().filter(|t| t.kept.is_some()).count();
+    let failed = o
+        .targets
+        .iter()
+        .filter(|t| t.kept.is_none() && t.error.is_some())
+        .count();
+    let gone = o.targets.len() - kept - failed;
+    let items = if gone == 1 { "item" } else { "items" };
+    let mut line = format!("{verb} {gone} {items}, {}", human(o.bytes));
+    if kept > 0 {
+        line.push_str(&format!(", kept {kept}"));
+    }
+    if failed > 0 {
+        line.push_str(&format!(", could not remove {failed}"));
+    }
+    line
+}
+
 pub fn print_text(c: &Cleaner, o: &Outcome) {
     println!("\n{}  ({})", c.name, c.summary);
     match o.status {
@@ -856,8 +878,13 @@ pub fn print_text(c: &Cleaner, o: &Outcome) {
             } else {
                 "would remove"
             };
-            println!("  {verb} {} files, {}", o.targets.len(), human(o.bytes));
-            println!("  every one of them checked against the application's own records");
+            println!("  {}", summary_line(verb, o));
+            // Only a cleaner that reads an application's database can say
+            // this. Printed for every long list, it credited a glob with a
+            // check nobody ran.
+            if c.orphans.is_some() {
+                println!("  every one of them checked against the application's own records");
+            }
         }
         Status::WouldClear | Status::Cleared => {
             for t in &o.targets {
@@ -920,6 +947,35 @@ mod tests {
         let mut both = user("x", &["~/a/b"]);
         both.command = vec!["true".into()];
         assert!(both.validate().is_err());
+    }
+
+    #[test]
+    fn the_summary_counts_what_went_not_what_matched() {
+        let target = |kept: Option<&str>, error: Option<&str>| Target {
+            path: PathBuf::from("/x"),
+            bytes: 1,
+            kept: kept.map(Into::into),
+            error: error.map(Into::into),
+        };
+        let o = Outcome {
+            name: "t".into(),
+            status: Status::Cleared,
+            reason: None,
+            command: None,
+            targets: vec![
+                target(None, None),
+                target(None, None),
+                target(Some("newest copy of a"), None),
+                target(None, Some("permission denied")),
+            ],
+            bytes: 2_000_000,
+            measured: false,
+            cache_bytes: None,
+        };
+        assert_eq!(
+            summary_line("removed", &o),
+            "removed 2 items, 2.0 MB, kept 1, could not remove 1"
+        );
     }
 
     #[test]
