@@ -610,7 +610,7 @@ pub fn run(only: &[String], growth: bool) {
             if i > 0 {
                 println!("(extra scan root from the config)");
             }
-            crate::growth::print_text(&crate::growth::report(&root, 3, 100 << 20, 15));
+            crate::growth::print_text(&crate::growth::report(&root, 3, 100_000_000, 15));
         }
     }
 

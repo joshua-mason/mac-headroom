@@ -36,6 +36,9 @@ mac-headroom check             # is free space low? notify and write a report if
 - Every cleaner states why it is safe.
 - Cleaners that touch a running app's cache are skipped while that app is open.
 - Sizes are physical blocks, not logical length, so sparse files and clones are not overcounted.
+- Sizes are written in decimal units, the way Finder writes them: a GB is a
+  billion bytes, not 1,073,741,824. Counting in units of 1024 makes the same
+  disk read about 7% smaller, which looks like space that has gone missing.
 - Chrome's profile data (Application Support) is never touched. Only its cache is.
 - Every real deletion, and only a real deletion, is appended to
   `~/.local/state/mac-headroom/audit.log`. A target a filter kept is not

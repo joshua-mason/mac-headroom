@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Anything smaller is not worth someone's attention.
-const WORTH_A_LOOK: u64 = 200 << 20;
+/// Anything smaller is not worth someone's attention. Decimal MB, so the
+/// cut-off is the number the report prints, not 4.8% above it.
+const WORTH_A_LOOK: u64 = 200_000_000;
 
 #[derive(Serialize, Deserialize)]
 pub struct Findings {
