@@ -94,6 +94,11 @@ struct DiskNow {
     free: u64,
     total: u64,
     other: u64,
+    /// The whole drive, when it could be measured. The page uses it to account
+    /// for the difference between the capacity it reports and the size on the
+    /// box, which is otherwise the page's most suspicious-looking number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -187,6 +192,7 @@ pub fn gather() -> Data {
                 free: d.free,
                 total: d.total,
                 other: d.total.saturating_sub(d.used + d.free),
+                media: d.media,
             })
         }),
         snapshots,
@@ -199,13 +205,13 @@ pub fn gather() -> Data {
         // the change view from the same list, and a change-ranked list would
         // silently drop everything that did not move.
         growth: timed("growth home", || {
-            crate::growth::from_saved(&home(), 3, 100 << 20, 80, crate::growth::Rank::Size)
+            crate::growth::from_saved(&home(), 3, 100_000_000, 80, crate::growth::Rank::Size)
         }),
         growth_roots: timed("growth other roots", || {
             crate::config::scan_roots()
                 .iter()
                 .filter_map(|r| {
-                    crate::growth::from_saved(r, 3, 100 << 20, 40, crate::growth::Rank::Size)
+                    crate::growth::from_saved(r, 3, 100_000_000, 40, crate::growth::Rank::Size)
                 })
                 .collect()
         }),

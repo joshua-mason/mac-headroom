@@ -178,18 +178,30 @@ pub fn disk_usage(path: &Path) -> u64 {
         .sum()
 }
 
+/// Sizes in decimal units, the way Finder, System Settings and the drive's own
+/// packaging count them: a KB is 1000 bytes, not 1024. The same disk is 245 GB
+/// decimal and 228 GB binary, and printing the 228 beside Finder's 245 reads as
+/// if 17 GB had gone missing. Matched by the report page and the Mac app, which
+/// format sizes themselves.
 pub fn human(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = bytes as f64;
     let mut i = 0;
-    while v >= 1024.0 && i < UNITS.len() - 1 {
-        v /= 1024.0;
+    while v >= 1000.0 && i < UNITS.len() - 1 {
+        v /= 1000.0;
+        i += 1;
+    }
+    // 999.5 MB would otherwise round to "1000 MB", a unit short of itself.
+    if v >= 999.5 && i < UNITS.len() - 1 {
+        v /= 1000.0;
         i += 1;
     }
     if i == 0 {
         format!("{bytes} B")
-    } else {
+    } else if v < 10.0 {
         format!("{v:.1} {}", UNITS[i])
+    } else {
+        format!("{v:.0} {}", UNITS[i])
     }
 }
 
@@ -265,16 +277,27 @@ mod tests {
     }
 
     #[test]
-    fn human_units() {
+    fn human_units_are_decimal_like_finder() {
         assert_eq!(human(0), "0 B");
-        assert_eq!(human(1023), "1023 B");
-        assert_eq!(human(1024), "1.0 KB");
-        assert_eq!(human(1_500_000_000), "1.4 GB");
+        assert_eq!(human(999), "999 B");
+        assert_eq!(human(1000), "1.0 KB");
+        assert_eq!(human(1_500_000_000), "1.5 GB");
+        // Under 10 keeps a decimal, above it does not: 21 GB, not 21.5 GB.
+        assert_eq!(human(20 * (1 << 30)), "21 GB");
+        // A 256 GB MacBook, the figure Finder shows for it, and the 228 GB that
+        // counting in units of 1024 would have printed instead.
+        assert_eq!(human(245_107_195_904), "245 GB");
+    }
+
+    #[test]
+    fn human_carries_instead_of_printing_a_thousand() {
+        assert_eq!(human(999_400_000), "999 MB");
+        assert_eq!(human(999_500_000), "1.0 GB");
     }
 
     #[test]
     fn signed_deltas() {
-        assert_eq!(signed(-2048), "-2.0 KB");
-        assert_eq!(signed(2048), "+2.0 KB");
+        assert_eq!(signed(-2000), "-2.0 KB");
+        assert_eq!(signed(2000), "+2.0 KB");
     }
 }

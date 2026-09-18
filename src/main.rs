@@ -236,7 +236,7 @@ fn main() {
             };
             let reports: Vec<growth::Report> = roots
                 .iter()
-                .map(|r| growth::report(r, depth, min_mb << 20, top))
+                .map(|r| growth::report(r, depth, min_mb * 1_000_000, top))
                 .collect();
             if cli.json {
                 emit(&reports);
@@ -646,7 +646,7 @@ fn scan(json: bool, no_open: bool) {
         "Measuring where the space is. On a full disk this takes a minute or two…",
     );
     for root in std::iter::once(home()).chain(config::scan_roots()) {
-        growth::report(&root, 3, 100 << 20, 15);
+        growth::report(&root, 3, 100_000_000, 15);
     }
     say("cleaners", "Working out what can safely be freed…");
     let found = findings::gather();
@@ -661,7 +661,7 @@ fn scan(json: bool, no_open: bool) {
         .reclaimable
         .iter()
         .filter_map(|e| e.bytes)
-        .filter(|b| *b >= 1 << 20)
+        .filter(|b| *b >= 1_000_000)
         .sum();
 
     if json {

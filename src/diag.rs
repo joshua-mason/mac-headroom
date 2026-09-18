@@ -8,12 +8,18 @@ use serde::Serialize;
 use std::fs;
 use std::io::Write;
 
-const GB: i64 = 1 << 30;
+/// Decimal, to match the sizes `human` prints beside these thresholds.
+const GB: i64 = 1_000_000_000;
 
 pub struct Disk {
     pub used: u64,
     pub free: u64,
     pub total: u64,
+    /// The whole drive the container sits on. Larger than `total`, because the
+    /// recovery and firmware partitions sit outside the container and no
+    /// volume can use them. The report shows the difference rather than
+    /// leaving someone to wonder where it went.
+    pub media: Option<u64>,
 }
 
 fn bytes_field(diskutil_out: &str, label: &str) -> Option<u64> {
@@ -24,12 +30,41 @@ fn bytes_field(diskutil_out: &str, label: &str) -> Option<u64> {
     line[start..end].trim().parse().ok()
 }
 
+/// The drive holding the container, measured whole. `diskutil info` names the
+/// container's physical store, `disk0s2`; the drive is that without the slice.
+/// A container spread over several stores has no single drive to point at, so
+/// this reports nothing rather than passing one store off as the disk.
+fn media_bytes(info: &str) -> Option<u64> {
+    let mut stores = info
+        .lines()
+        .filter_map(|l| l.split_once("APFS Physical Store:"))
+        .map(|(_, v)| v.trim());
+    let store = stores.next()?;
+    if stores.next().is_some() {
+        return None;
+    }
+    let digits: String = store
+        .strip_prefix("disk")?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let whole = format!("disk{digits}");
+    bytes_field(&stdout_of("diskutil", &["info", &whole]), "Disk Size")
+}
+
 pub fn disk() -> Option<Disk> {
     let info = stdout_of("diskutil", &["info", "/System/Volumes/Data"]);
+    let total = bytes_field(&info, "Container Total Space")?;
     Some(Disk {
         used: bytes_field(&info, "Volume Used Space")?,
         free: bytes_field(&info, "Container Free Space")?,
-        total: bytes_field(&info, "Container Total Space")?,
+        total,
+        // A drive smaller than the container it holds means the parse is
+        // wrong, and a wrong number explained confidently is worse than none.
+        media: media_bytes(&info).filter(|m| *m >= total),
     })
 }
 
