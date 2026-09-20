@@ -446,6 +446,135 @@ fn project_roots(h: &Path) -> Vec<PathBuf> {
 /// Folders found, each with its size on disk.
 type Sized = Vec<(PathBuf, u64)>;
 
+/// How many dependency folders to judge one by one. Each costs a few file
+/// checks and a git call, and a page listing two hundred helps nobody.
+const ITEMS_LISTED: usize = 15;
+
+#[derive(Clone, Copy)]
+enum Rebuilt {
+    NodeModules,
+    Venv,
+}
+
+/// Whether a file with one of these names sits in `dir` or a folder above it,
+/// stopping at the top of the repository. A package in a monorepo keeps its
+/// node_modules beside its own package.json and its lock file at the root.
+fn found_upwards(dir: &Path, names: &[&str]) -> bool {
+    for folder in dir.ancestors().take(5) {
+        if names.iter().any(|n| folder.join(n).is_file()) {
+            return true;
+        }
+        if folder.join(".git").exists() {
+            break;
+        }
+    }
+    false
+}
+
+/// Whether deleting a dependency folder loses nothing, and why. It loses
+/// nothing only when a lock file can rebuild it exactly. A manifest without
+/// one brings back whatever versions are current that day, which is usually
+/// fine and is not the same thing, so that is left to the person.
+fn rebuild_verdict(folder: &Path, kind: Rebuilt) -> (bool, String) {
+    let Some(project) = folder.parent() else {
+        return (false, "nothing says how to rebuild it".into());
+    };
+    let (manifests, locks): (&[&str], &[&str]) = match kind {
+        Rebuilt::NodeModules => (
+            &["package.json"],
+            &[
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "bun.lock",
+                "bun.lockb",
+                "npm-shrinkwrap.json",
+            ],
+        ),
+        Rebuilt::Venv => (
+            &[
+                "pyproject.toml",
+                "requirements.txt",
+                "Pipfile",
+                "setup.py",
+                "environment.yml",
+            ],
+            &["uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock"],
+        ),
+    };
+    if !manifests.iter().any(|m| project.join(m).is_file()) {
+        let expected = match kind {
+            Rebuilt::NodeModules => "no package.json beside it",
+            Rebuilt::Venv => "no project file beside it",
+        };
+        return (
+            false,
+            format!("{expected}, so nothing says how to rebuild it"),
+        );
+    }
+    if found_upwards(project, locks) {
+        (
+            true,
+            "a lock file is kept with it, so reinstalling rebuilds it exactly".to_string(),
+        )
+    } else {
+        (
+            false,
+            "no lock file, so reinstalling may bring back different versions".to_string(),
+        )
+    }
+}
+
+/// When the project around a folder was last worked on: its last commit, or
+/// failing that the last change to the folder holding it.
+fn last_worked_on(project: &Path) -> Option<u64> {
+    let p = project.to_string_lossy();
+    crate::util::stdout_of("git", &["-C", &p, "log", "-1", "--format=%ct"])
+        .trim()
+        .parse()
+        .ok()
+        .or_else(|| {
+            fs::metadata(project)
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        })
+}
+
+/// The largest dependency folders, each with whether it can be rebuilt
+/// exactly and how long the project has sat untouched. The tool removes none
+/// of them: which projects someone is finished with is theirs to say.
+fn rebuildable_items(found: &[(PathBuf, u64)], kind: Rebuilt) -> Vec<Item> {
+    let mut found: Vec<&(PathBuf, u64)> = found.iter().collect();
+    found.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    found
+        .into_iter()
+        .take(ITEMS_LISTED)
+        .map(|(path, bytes)| {
+            let (safe, why) = rebuild_verdict(path, kind);
+            let worked = path
+                .parent()
+                .and_then(last_worked_on)
+                .map(|at| format!(", project last worked on {}", crate::util::ago(at)))
+                .unwrap_or_default();
+            Item {
+                path: path.display().to_string(),
+                bytes: *bytes,
+                safe,
+                note: format!("{why}{worked}"),
+                command: if safe {
+                    format!("rm -rf {}", shell_quote(path))
+                } else {
+                    String::new()
+                },
+            }
+        })
+        .collect()
+}
+
 /// Dependency folders a project re-creates on install: node_modules, and
 /// Python virtual environments (recognised by their pyvenv.cfg).
 fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized) {
@@ -592,6 +721,7 @@ pub fn detections() -> Vec<Detection> {
 
     let (node, venv, trees) = dependency_folders(&project_roots(&h));
     let trees_found: Vec<PathBuf> = trees.iter().map(|(p, _)| p.clone()).collect();
+    let (node_found, venv_found) = (node.clone(), venv.clone());
     grouped(&mut out, node, "node-modules", "JavaScript project dependencies",
         "Each JavaScript project keeps a node_modules folder of the libraries it uses. They add up quickly across many projects.",
         "Delete node_modules in projects you are not working on. Running `npm install` in a project brings it back.");
@@ -604,6 +734,19 @@ pub fn detections() -> Vec<Detection> {
 
     if let Some(d) = out.iter_mut().find(|d| d.id == "agent-worktrees") {
         d.items = worktree_items(&trees_found);
+    }
+    // Judged only once the group is known to be worth listing at all.
+    for (id, found, kind) in [
+        ("node-modules", node_found, Rebuilt::NodeModules),
+        ("python-venvs", venv_found, Rebuilt::Venv),
+    ] {
+        if let Some(d) = out.iter_mut().find(|d| d.id == id) {
+            d.items = rebuildable_items(&found, kind);
+            if found.len() > ITEMS_LISTED {
+                d.what
+                    .push_str(&format!(" The {ITEMS_LISTED} largest are listed."));
+            }
+        }
     }
 
     if !crate::util::skipping_protected() && !is_running("WhatsApp") {
@@ -857,5 +1000,74 @@ mod tests {
             c.validate().unwrap_or_else(|e| panic!("{e}"));
             assert!(c.why_safe.len() > 40, "{cleaner}: why_safe is too thin");
         }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mac-headroom-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Safe means checked: only a lock file makes a rebuilt folder the same
+    /// folder. A manifest alone does not, and nothing at all certainly not.
+    #[test]
+    fn a_dependency_folder_is_safe_only_with_a_lock_file() {
+        let root = scratch("verdict");
+        for p in ["locked", "loose", "bare"] {
+            fs::create_dir_all(root.join(p).join("node_modules")).unwrap();
+        }
+        fs::write(root.join("locked/package.json"), "{}").unwrap();
+        fs::write(root.join("locked/pnpm-lock.yaml"), "").unwrap();
+        fs::write(root.join("loose/package.json"), "{}").unwrap();
+
+        let verdict =
+            |p: &str| rebuild_verdict(&root.join(p).join("node_modules"), Rebuilt::NodeModules);
+        assert!(verdict("locked").0);
+        let (safe, why) = verdict("loose");
+        assert!(!safe && why.starts_with("no lock file"), "{why}");
+        let (safe, why) = verdict("bare");
+        assert!(!safe && why.starts_with("no package.json"), "{why}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A workspace package has its lock file at the top of the repository,
+    /// and the search for one must not wander out of the repository.
+    #[test]
+    fn a_lock_file_is_found_at_the_top_of_the_repository_and_no_higher() {
+        let root = scratch("upwards");
+        let pkg = root.join("repo/packages/web");
+        fs::create_dir_all(pkg.join("node_modules")).unwrap();
+        fs::create_dir_all(root.join("repo/.git")).unwrap();
+        fs::write(pkg.join("package.json"), "{}").unwrap();
+        fs::write(root.join("yarn.lock"), "").unwrap();
+        assert!(!rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
+        fs::write(root.join("repo/yarn.lock"), "").unwrap();
+        assert!(rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn only_the_largest_folders_are_listed_and_only_safe_ones_get_a_command() {
+        let root = scratch("items");
+        let mut found = Vec::new();
+        for i in 0..(ITEMS_LISTED as u64 + 5) {
+            let project = root.join(format!("p{i}"));
+            fs::create_dir_all(project.join(".venv")).unwrap();
+            fs::write(project.join("pyproject.toml"), "").unwrap();
+            if i % 2 == 0 {
+                fs::write(project.join("uv.lock"), "").unwrap();
+            }
+            found.push((project.join(".venv"), 1000 + i));
+        }
+        let items = rebuildable_items(&found, Rebuilt::Venv);
+        assert_eq!(items.len(), ITEMS_LISTED);
+        assert_eq!(items[0].bytes, 1000 + ITEMS_LISTED as u64 + 4);
+        for item in &items {
+            assert_eq!(item.safe, !item.command.is_empty());
+            assert_eq!(item.safe, item.command.starts_with("rm -rf '"));
+        }
+        assert!(items.iter().any(|i| i.safe) && items.iter().any(|i| !i.safe));
+        fs::remove_dir_all(&root).unwrap();
     }
 }
