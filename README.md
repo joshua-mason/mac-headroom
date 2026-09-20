@@ -169,6 +169,30 @@ install time, and appends everything to `~/Library/Logs/mac-headroom.log`. Becau
 Install the binary somewhere stable first (`cargo install --path .`); the plist
 points at the binary's absolute path.
 
+### Does clearing every week wear out the disk?
+
+No, and it is a fair thing to wonder. An SSD wears by being written to, not by
+having files deleted, so removing a cache costs almost nothing. What costs
+writes is what follows: the cache is downloaded or built again. A weekly clear
+that frees a few GB therefore causes a few GB of writes a week, on a drive
+rated for hundreds of terabytes over its life. Ordinary use, swap included,
+writes more than that in a day.
+
+Running nearly full is what does cost wear. With little free space the drive
+has less room to spread writes around, each write causes more copying inside
+it, and macOS leans harder on swap. Keeping headroom is kinder to the drive
+than the clearing is unkind.
+
+The habit worth avoiding is clearing something that is rebuilt in full
+straight away, such as Xcode's build folder every day. That is writes for
+nothing, and it is why `keep_newest` and `older_than_days` exist: they leave
+live caches alone.
+
+None of that is measured by this tool. If you want your own drive's figure,
+`smartctl -a disk0` from `brew install smartmontools` reports "Percentage Used"
+and "Data Units Written", and two readings a month apart say how fast it is
+really wearing.
+
 ## Report
 
 `report` writes one self-contained HTML file (no server, no network, no
