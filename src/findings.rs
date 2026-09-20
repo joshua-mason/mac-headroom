@@ -684,75 +684,6 @@ pub fn gather() -> Findings {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mac-headroom-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Safe means checked: only a lock file makes a rebuilt folder the same
-    /// folder. A manifest alone does not, and nothing at all certainly not.
-    #[test]
-    fn a_dependency_folder_is_safe_only_with_a_lock_file() {
-        let root = scratch("verdict");
-        for p in ["locked", "loose", "bare"] {
-            fs::create_dir_all(root.join(p).join("node_modules")).unwrap();
-        }
-        fs::write(root.join("locked/package.json"), "{}").unwrap();
-        fs::write(root.join("locked/pnpm-lock.yaml"), "").unwrap();
-        fs::write(root.join("loose/package.json"), "{}").unwrap();
-
-        let verdict =
-            |p: &str| rebuild_verdict(&root.join(p).join("node_modules"), Rebuilt::NodeModules);
-        assert!(verdict("locked").0);
-        let (safe, why) = verdict("loose");
-        assert!(!safe && why.starts_with("no lock file"), "{why}");
-        let (safe, why) = verdict("bare");
-        assert!(!safe && why.starts_with("no package.json"), "{why}");
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    /// A workspace package has its lock file at the top of the repository,
-    /// and the search for one must not wander out of the repository.
-    #[test]
-    fn a_lock_file_is_found_at_the_top_of_the_repository_and_no_higher() {
-        let root = scratch("upwards");
-        let pkg = root.join("repo/packages/web");
-        fs::create_dir_all(pkg.join("node_modules")).unwrap();
-        fs::create_dir_all(root.join("repo/.git")).unwrap();
-        fs::write(pkg.join("package.json"), "{}").unwrap();
-        fs::write(root.join("yarn.lock"), "").unwrap();
-        assert!(!rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
-        fs::write(root.join("repo/yarn.lock"), "").unwrap();
-        assert!(rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
-        fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn only_the_largest_folders_are_listed_and_only_safe_ones_get_a_command() {
-        let root = scratch("items");
-        let mut found = Vec::new();
-        for i in 0..(ITEMS_LISTED as u64 + 5) {
-            let project = root.join(format!("p{i}"));
-            fs::create_dir_all(project.join(".venv")).unwrap();
-            fs::write(project.join("pyproject.toml"), "").unwrap();
-            if i % 2 == 0 {
-                fs::write(project.join("uv.lock"), "").unwrap();
-            }
-            found.push((project.join(".venv"), 1000 + i));
-        }
-        let items = rebuildable_items(&found, Rebuilt::Venv);
-        assert_eq!(items.len(), ITEMS_LISTED);
-        assert_eq!(items[0].bytes, 1000 + ITEMS_LISTED as u64 + 4);
-        for item in &items {
-            assert_eq!(item.safe, !item.command.is_empty());
-            assert_eq!(item.safe, item.command.starts_with("rm -rf '"));
-        }
-        assert!(items.iter().any(|i| i.safe) && items.iter().any(|i| !i.safe));
-        fs::remove_dir_all(&root).unwrap();
-    }
-
     /// A typo in ACTIONS would not fail to compile: it would silently leave a
     /// detection with no button, which is the failure nobody notices.
     #[test]
@@ -907,5 +838,74 @@ mod tests {
             c.validate().unwrap_or_else(|e| panic!("{e}"));
             assert!(c.why_safe.len() > 40, "{cleaner}: why_safe is too thin");
         }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mac-headroom-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Safe means checked: only a lock file makes a rebuilt folder the same
+    /// folder. A manifest alone does not, and nothing at all certainly not.
+    #[test]
+    fn a_dependency_folder_is_safe_only_with_a_lock_file() {
+        let root = scratch("verdict");
+        for p in ["locked", "loose", "bare"] {
+            fs::create_dir_all(root.join(p).join("node_modules")).unwrap();
+        }
+        fs::write(root.join("locked/package.json"), "{}").unwrap();
+        fs::write(root.join("locked/pnpm-lock.yaml"), "").unwrap();
+        fs::write(root.join("loose/package.json"), "{}").unwrap();
+
+        let verdict =
+            |p: &str| rebuild_verdict(&root.join(p).join("node_modules"), Rebuilt::NodeModules);
+        assert!(verdict("locked").0);
+        let (safe, why) = verdict("loose");
+        assert!(!safe && why.starts_with("no lock file"), "{why}");
+        let (safe, why) = verdict("bare");
+        assert!(!safe && why.starts_with("no package.json"), "{why}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A workspace package has its lock file at the top of the repository,
+    /// and the search for one must not wander out of the repository.
+    #[test]
+    fn a_lock_file_is_found_at_the_top_of_the_repository_and_no_higher() {
+        let root = scratch("upwards");
+        let pkg = root.join("repo/packages/web");
+        fs::create_dir_all(pkg.join("node_modules")).unwrap();
+        fs::create_dir_all(root.join("repo/.git")).unwrap();
+        fs::write(pkg.join("package.json"), "{}").unwrap();
+        fs::write(root.join("yarn.lock"), "").unwrap();
+        assert!(!rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
+        fs::write(root.join("repo/yarn.lock"), "").unwrap();
+        assert!(rebuild_verdict(&pkg.join("node_modules"), Rebuilt::NodeModules).0);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn only_the_largest_folders_are_listed_and_only_safe_ones_get_a_command() {
+        let root = scratch("items");
+        let mut found = Vec::new();
+        for i in 0..(ITEMS_LISTED as u64 + 5) {
+            let project = root.join(format!("p{i}"));
+            fs::create_dir_all(project.join(".venv")).unwrap();
+            fs::write(project.join("pyproject.toml"), "").unwrap();
+            if i % 2 == 0 {
+                fs::write(project.join("uv.lock"), "").unwrap();
+            }
+            found.push((project.join(".venv"), 1000 + i));
+        }
+        let items = rebuildable_items(&found, Rebuilt::Venv);
+        assert_eq!(items.len(), ITEMS_LISTED);
+        assert_eq!(items[0].bytes, 1000 + ITEMS_LISTED as u64 + 4);
+        for item in &items {
+            assert_eq!(item.safe, !item.command.is_empty());
+            assert_eq!(item.safe, item.command.starts_with("rm -rf '"));
+        }
+        assert!(items.iter().any(|i| i.safe) && items.iter().any(|i| !i.safe));
+        fs::remove_dir_all(&root).unwrap();
     }
 }
