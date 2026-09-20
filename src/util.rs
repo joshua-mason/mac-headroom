@@ -259,9 +259,52 @@ pub fn stdout_of(cmd: &str, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// Like `stdout_of`, for a command that talks to a daemon and so may never
+/// answer. Gives up after `secs`, kills it, and returns nothing: a scan that
+/// hangs on someone else's wedged service is worse than one missing a detail.
+/// Meant for short outputs; the pipe is read only after the command exits.
+pub fn stdout_within(cmd: &str, args: &[&str], secs: u64) -> Option<String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = Command::new(cmd)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut out = String::new();
+                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                return status.success().then_some(out);
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_that_never_answers_is_given_up_on() {
+        let started = std::time::Instant::now();
+        assert_eq!(stdout_within("sleep", &["30"], 1), None);
+        assert!(started.elapsed().as_secs() < 5);
+        assert_eq!(stdout_within("echo", &["hi"], 5).as_deref(), Some("hi\n"));
+        assert_eq!(stdout_within("false", &[], 5), None);
+    }
 
     #[test]
     fn protected_folders_are_only_skipped_when_asked() {
