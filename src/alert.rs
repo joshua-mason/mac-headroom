@@ -1,7 +1,7 @@
 //! Noticing that the disk is filling up before it is too late.
 //!
 //! `check` is deliberately cheap: one `diskutil` call and no directory walk, so
-//! it can run every hour. When free space falls below the configured share of
+//! it can run every hour. Each run adds a reading to the timeline. When free space falls below the configured share of
 //! the disk it writes a fresh report and posts a notification, then holds its
 //! tongue for a cooldown so a full disk does not nag every hour.
 
@@ -68,6 +68,10 @@ pub fn check(force: bool) -> Option<Check> {
     let threshold_percent = crate::config::alert_below_percent();
     let free_percent = 100.0 * d.free as f64 / d.total.max(1) as f64;
     let low = threshold_percent > 0.0 && free_percent < threshold_percent;
+
+    // The hourly run is what gives the timeline enough points to show a day
+    // happening. The disk has just been measured, so the reading is free.
+    crate::diag::record_if_due(&d, crate::diag::CHECK_READING_GAP_SECS);
 
     let at = now();
     let quiet = last_alert().filter(|t| at.saturating_sub(*t) < COOLDOWN_SECS);

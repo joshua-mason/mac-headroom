@@ -9,13 +9,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
-struct Reading {
-    at: u64,
-    used: u64,
-    free: u64,
-}
-
-#[derive(Serialize)]
 struct AuditEntry {
     at: u64,
     cleaner: String,
@@ -70,7 +63,7 @@ pub struct Data {
     snapshots: Vec<String>,
     volumes: crate::volumes::Volumes,
     update_snapshot_pinned: bool,
-    history: Vec<Reading>,
+    history: Vec<crate::diag::Reading>,
     #[serde(skip_serializing_if = "Option::is_none")]
     growth: Option<crate::growth::Report>,
     /// One per extra root in the config, so the page can show the part of the
@@ -118,21 +111,6 @@ fn runs() -> Vec<Run> {
                 at: f.next()?.parse().ok()?,
                 free_before: f.next()?.parse().ok()?,
                 free_after: f.next()?.parse().ok()?,
-            })
-        })
-        .collect()
-}
-
-fn history() -> Vec<Reading> {
-    fs::read_to_string(state_dir().join("history.tsv"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| {
-            let mut f = l.split('\t');
-            Some(Reading {
-                at: f.next()?.parse().ok()?,
-                used: f.next()?.parse().ok()?,
-                free: f.next()?.parse().ok()?,
             })
         })
         .collect()
@@ -198,7 +176,7 @@ pub fn gather() -> Data {
         snapshots,
         volumes: timed("volumes", crate::volumes::gather),
         update_snapshot_pinned,
-        history: timed("history", history),
+        history: timed("history", crate::diag::history),
         // More entries than the terminal shows: the page nests them into a
         // tree, so it needs the parents as well as the leaves.
         // Ranked by size, not by change: the page renders the size view and

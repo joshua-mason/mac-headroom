@@ -102,22 +102,83 @@ pub struct Report {
     pub advice: String,
 }
 
-/// Returns the previous (timestamp, used, free) reading, then appends the current one.
-fn record(d: &Disk) -> Option<(u64, u64, u64)> {
-    let path = state_dir().join("history.tsv");
-    let previous = fs::read_to_string(&path).ok().and_then(|s| {
-        let last = s.lines().rev().find(|l| !l.trim().is_empty())?;
-        let mut f = last.split('\t');
-        Some((
-            f.next()?.parse().ok()?,
-            f.next()?.parse().ok()?,
-            f.next()?.parse().ok()?,
-        ))
-    });
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{}\t{}\t{}", now(), d.used, d.free);
+/// One row of `history.tsv`.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    pub at: u64,
+    pub used: u64,
+    pub free: u64,
+}
+
+/// How old a reading has to be before it is worth comparing against.
+const BASELINE_AGE_SECS: u64 = 24 * 3600;
+
+/// `check` runs hourly, and something else may call it more often. A reading
+/// closer than this to the last one adds a row and no information.
+pub const CHECK_READING_GAP_SECS: u64 = 50 * 60;
+
+fn history_path() -> std::path::PathBuf {
+    state_dir().join("history.tsv")
+}
+
+/// Every reading on record, oldest first. Lines that do not parse are skipped.
+pub fn history() -> Vec<Reading> {
+    parse_history(&fs::read_to_string(history_path()).unwrap_or_default())
+}
+
+fn parse_history(text: &str) -> Vec<Reading> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            Some(Reading {
+                at: f.next()?.parse().ok()?,
+                used: f.next()?.parse().ok()?,
+                free: f.next()?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// The reading to compare the present against: the newest one at least a day
+/// old, or the oldest there is while the record is younger than that.
+///
+/// It used to be simply the last row, which was right while a row was written
+/// once a week. With a row an hour it would mean comparing against an hour
+/// ago, where nothing has moved far enough to cross a threshold, and the
+/// diagnosis would go quiet exactly when readings became plentiful.
+pub fn baseline(rows: &[Reading], now: u64) -> Option<Reading> {
+    rows.iter()
+        .rev()
+        .find(|r| now.saturating_sub(r.at) >= BASELINE_AGE_SECS)
+        .or_else(|| rows.first())
+        .copied()
+}
+
+fn append_reading(d: &Disk, at: u64) {
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_path())
+    {
+        let _ = writeln!(f, "{}\t{}\t{}", at, d.used, d.free);
     }
-    previous
+}
+
+/// Whether a reading taken now would be far enough from the last one.
+fn reading_is_due(rows: &[Reading], now: u64, min_gap: u64) -> bool {
+    rows.last()
+        .is_none_or(|last| now.saturating_sub(last.at) >= min_gap)
+}
+
+/// For callers that run often and measure the disk anyway. Returns whether a
+/// row was written.
+pub fn record_if_due(d: &Disk, min_gap: u64) -> bool {
+    let at = now();
+    let due = reading_is_due(&history(), at, min_gap);
+    if due {
+        append_reading(d, at);
+    }
+    due
 }
 
 /// Local APFS snapshots. A staged macOS update leaves `com.apple.os.update-*`
@@ -135,16 +196,18 @@ pub fn report() -> Option<Report> {
     let snapshots = snapshots();
     let update_snapshot_pinned = snapshots.iter().any(|n| n.contains("com.apple.os.update"));
 
-    let since_last = record(&d).map(|(previous_at, pu, pf)| {
-        let used = d.used as i64 - pu as i64;
-        let free = d.free as i64 - pf as i64;
+    let at = now();
+    let since_last = baseline(&history(), at).map(|b| {
+        let used = d.used as i64 - b.used as i64;
+        let free = d.free as i64 - b.free as i64;
         Delta {
-            previous_at,
+            previous_at: b.at,
             used,
             free,
             unaccounted: -free - used,
         }
     });
+    append_reading(&d, at);
 
     let (assessment, advice) = match &since_last {
         _ if update_snapshot_pinned => (
@@ -203,7 +266,7 @@ pub fn print_text(r: &Report) {
     println!();
     if let Some(d) = &r.since_last {
         println!(
-            "Since last run ({}): used {}, free {}",
+            "Since the reading {}: used {}, free {}",
             ago(d.previous_at),
             signed(d.used),
             signed(d.free)
@@ -225,5 +288,54 @@ mod tests {
             Some(36_304_953_344)
         );
         assert_eq!(bytes_field(out, "Nope"), None);
+    }
+
+    fn at(at: u64) -> Reading {
+        Reading {
+            at,
+            used: at,
+            free: at,
+        }
+    }
+
+    #[test]
+    fn baseline_is_chosen_by_age_not_position() {
+        let day = BASELINE_AGE_SECS;
+        let now = 10 * day;
+        // A week-old reading, one just over a day old, then a run of hourly ones.
+        let rows = [
+            at(3 * day),
+            at(now - day - 60),
+            at(now - 7200),
+            at(now - 3600),
+        ];
+        assert_eq!(baseline(&rows, now), Some(at(now - day - 60)));
+        // Weekly rows only: the last row is the baseline, as it always was.
+        assert_eq!(baseline(&rows[..1], now), Some(at(3 * day)));
+    }
+
+    #[test]
+    fn a_young_record_compares_against_its_first_reading() {
+        let now = 1_000_000;
+        let rows = [at(now - 7200), at(now - 3600), at(now - 60)];
+        assert_eq!(baseline(&rows, now), Some(at(now - 7200)));
+        assert_eq!(baseline(&[], now), None);
+    }
+
+    #[test]
+    fn a_reading_is_due_only_once_the_gap_has_passed() {
+        let now = 1_000_000;
+        assert!(reading_is_due(&[], now, 3000));
+        assert!(reading_is_due(&[at(now - 3000)], now, 3000));
+        assert!(!reading_is_due(&[at(now - 2999)], now, 3000));
+        // A clock that went backwards must not stop readings for good... but
+        // it must not write one a second either.
+        assert!(!reading_is_due(&[at(now + 50)], now, 3000));
+    }
+
+    #[test]
+    fn history_skips_lines_that_do_not_parse() {
+        let rows = parse_history("1\t2\t3\n\nnot a row\n4\t5\n7\t8\t9\n");
+        assert_eq!(rows.iter().map(|r| r.at).collect::<Vec<_>>(), vec![1, 7]);
     }
 }

@@ -8,7 +8,7 @@ full the answer is usually one directory that grew, or space pinned by APFS
 snapshots that `du` cannot see.
 
 ```
-mac-headroom diagnose          # used/free/snapshots, and whether they moved together since last run
+mac-headroom diagnose          # used/free/snapshots, and whether they moved together since a reading at least a day old
 mac-headroom growth            # which directories grew since the last scan
 mac-headroom list              # every cleaner and why it is safe
 mac-headroom clean             # dry run: what would be deleted and how big it is
