@@ -9,7 +9,7 @@
 //! run and is saved. The report reads the saved copy and stays quick.
 
 use crate::cleaners;
-use crate::util::{disk_usage, home, is_running, now, state_dir};
+use crate::util::{disk_usage, home, human, is_running, now, state_dir};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -283,6 +283,114 @@ pub fn load_current() -> Option<Findings> {
     Some(f)
 }
 
+/// One line of `docker system df`.
+#[derive(Debug, PartialEq)]
+struct DockerUsage {
+    kind: String,
+    count: u64,
+    reclaimable: u64,
+}
+
+/// Docker prints sizes its own way, "4.102GB" or "512kB", in decimal units.
+fn parse_docker_size(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+    let (number, unit) = text.split_at(split);
+    let scale = match unit.trim() {
+        "B" => 1.0,
+        "kB" | "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        "TB" => 1e12,
+        _ => return None,
+    };
+    Some((number.parse::<f64>().ok()? * scale) as u64)
+}
+
+/// `docker system df --format '{{json .}}'`: one JSON object a line, every
+/// value a string, and Reclaimable either "0B" or "3.65GB (89%)".
+fn parse_docker_df(text: &str) -> Vec<DockerUsage> {
+    text.lines()
+        .filter_map(|l| {
+            let v: serde_json::Value = serde_json::from_str(l).ok()?;
+            let reclaimable = v.get("Reclaimable")?.as_str()?;
+            Some(DockerUsage {
+                kind: v.get("Type")?.as_str()?.to_string(),
+                count: v.get("TotalCount")?.as_str()?.parse().ok()?,
+                reclaimable: parse_docker_size(reclaimable.split(' ').next()?)?,
+            })
+        })
+        .collect()
+}
+
+/// What to say about Docker's disk once Docker has been asked. The figures
+/// are Docker's own and are given as such. Volumes are counted out: they are
+/// where databases live, and nothing here should nudge anyone to prune them.
+fn docker_advice(rows: &[DockerUsage]) -> Option<String> {
+    let of = |kind: &str| rows.iter().find(|r| r.kind == kind);
+    let images = of("Images").map_or(0, |r| r.reclaimable);
+    let cache = of("Build Cache").map_or(0, |r| r.reclaimable);
+    let containers = of("Containers").map_or(0, |r| r.reclaimable);
+    if rows.is_empty() {
+        return None;
+    }
+    let volumes = match of("Local Volumes") {
+        Some(v) if v.count > 0 => format!(
+            " It also holds {} volume{}, which is where databases usually live. Leave those unless you know each one.",
+            v.count,
+            if v.count == 1 { "" } else { "s" }
+        ),
+        _ => String::new(),
+    };
+    let total = images + cache + containers;
+    if total < 100_000_000 {
+        return Some(format!(
+            "Docker reports almost nothing inside it as unused, so pruning would free little.{volumes}"
+        ));
+    }
+    let mut parts = Vec::new();
+    if images > 0 {
+        parts.push(format!(
+            "{} of images no container uses (`docker image prune -a`)",
+            human(images)
+        ));
+    }
+    if cache > 0 {
+        parts.push(format!(
+            "{} of build cache (`docker builder prune`)",
+            human(cache)
+        ));
+    }
+    if containers > 0 {
+        parts.push(format!(
+            "{} in stopped containers (`docker container prune`)",
+            human(containers)
+        ));
+    }
+    Some(format!(
+        "Docker reports {} inside it as unused: {}. That is Docker's figure, not a measurement of this disk, and how much of it the file hands back is up to Docker Desktop.{volumes}",
+        human(total),
+        parts.join(", ")
+    ))
+}
+
+/// Ask Docker what it considers unused, and say that instead of the generic
+/// advice. Images pulled by a tool on someone's behalf, with no container
+/// using them, were most of a disk image that doubled in a day here.
+fn explain_docker(out: &mut [Detection]) {
+    let Some(d) = out.iter_mut().find(|d| d.id == "docker") else {
+        return;
+    };
+    let asked =
+        crate::util::stdout_within("docker", &["system", "df", "--format", "{{json .}}"], 10);
+    match asked.and_then(|text| docker_advice(&parse_docker_df(&text))) {
+        Some(advice) => d.how = advice,
+        None => d.how.push_str(
+            " Docker is not running, so it could not be asked how much of this is unused. Start Docker Desktop and scan again to see.",
+        ),
+    }
+}
+
 fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &str, how: &str) {
     if crate::util::skip_protected(&path) || !path.exists() {
         return;
@@ -416,6 +524,7 @@ pub fn detections() -> Vec<Detection> {
     fixed(&mut out, h.join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"), "docker", "Docker's virtual disk",
         "Docker Desktop keeps images, containers and their data inside one large file, and it does not shrink on its own.",
         "Run `docker system prune -a` to remove images and stopped containers you are not using. It keeps volumes, which is where databases usually live.");
+    explain_docker(&mut out);
     fixed(&mut out, h.join("Library/Developer/CoreSimulator/Devices"), "simulators", "iPhone and iPad simulators",
         "Simulated devices created by Xcode, each with its own apps and data.",
         "Run `xcrun simctl delete unavailable` to remove simulators for iOS versions you no longer have installed.");
@@ -540,6 +649,59 @@ pub fn gather() -> Findings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DOCKER_DF: &str = r#"{"Active":"1","Reclaimable":"3.65GB (89%)","Size":"4.102GB","TotalCount":"3","Type":"Images"}
+{"Active":"1","Reclaimable":"0B","Size":"12.3kB","TotalCount":"2","Type":"Containers"}
+{"Active":"2","Reclaimable":"1.2GB","Size":"9.8GB","TotalCount":"34","Type":"Local Volumes"}
+{"Active":"0","Reclaimable":"512.5MB","Size":"512.5MB","TotalCount":"40","Type":"Build Cache"}
+"#;
+
+    #[test]
+    fn docker_sizes_are_decimal_and_carry_their_unit() {
+        assert_eq!(parse_docker_size("0B"), Some(0));
+        assert_eq!(parse_docker_size("12.3kB"), Some(12_300));
+        assert_eq!(parse_docker_size("4.102GB"), Some(4_102_000_000));
+        assert_eq!(parse_docker_size("lots"), None);
+        assert_eq!(parse_docker_size("5"), None);
+    }
+
+    #[test]
+    fn docker_advice_names_what_is_unused_and_leaves_volumes_out_of_it() {
+        let rows = parse_docker_df(DOCKER_DF);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].reclaimable, 3_650_000_000);
+        let advice = docker_advice(&rows).unwrap();
+        // Images and build cache, and not the 1.2 GB Docker calls reclaimable
+        // in volumes: those are someone's databases.
+        assert!(
+            advice.starts_with("Docker reports 4.2 GB inside it as unused"),
+            "{advice}"
+        );
+        assert!(
+            advice.contains("docker image prune -a") && advice.contains("docker builder prune")
+        );
+        assert!(!advice.contains("container prune"));
+        assert!(advice.contains("34 volumes"));
+        assert!(!advice.contains("volume prune"));
+    }
+
+    #[test]
+    fn docker_advice_says_so_when_there_is_nothing_to_prune() {
+        let empty = parse_docker_df(
+            r#"{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Images"}"#,
+        );
+        let advice = docker_advice(&empty).unwrap();
+        assert!(
+            advice.starts_with("Docker reports almost nothing"),
+            "{advice}"
+        );
+        assert!(!advice.contains("volume"));
+        // Docker did not answer at all: nothing to say, keep the general advice.
+        assert_eq!(
+            docker_advice(&parse_docker_df("Cannot connect to the Docker daemon")),
+            None
+        );
+    }
 
     /// A typo in ACTIONS would not fail to compile: it would silently leave a
     /// detection with no button, which is the failure nobody notices.
