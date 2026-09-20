@@ -279,6 +279,27 @@ document.addEventListener('click', e => {
 });
 const DAY = 86400;
 const H = D.history || [];
+/* The reading to compare the latest against: the newest one at least a day
+   older, or the first while the record is younger than that. Chosen by age
+   and not by position, because readings now arrive hourly and an hour ago is
+   too close for anything to have moved. The tool's diagnose does the same. */
+function baselineReading() {
+  if (H.length < 2) return null;
+  const last = H[H.length - 1];
+  for (let i = H.length - 2; i >= 0; i--) if (last.at - H[i].at >= DAY) return H[i];
+  return H[0];
+}
+/* Everything from the last week, then the last reading of each day before
+   it. The chart draws every point; a table of thousands of rows helps nobody. */
+function thinnedReadings() {
+  if (!H.length) return [];
+  const cutoff = H[H.length - 1].at - 7 * DAY, out = [];
+  for (let i = 0; i < H.length; i++) {
+    const r = H[i], next = H[i + 1];
+    if (r.at >= cutoff || !next || new Date(next.at * 1000).toDateString() !== new Date(r.at * 1000).toDateString()) out.push(r);
+  }
+  return out;
+}
 const returning = H.length >= 2 && (H[H.length - 1].at - H[0].at) >= DAY / 2;
 
 /* Days until full, from the trend of free space over the last month. */
@@ -311,7 +332,7 @@ function daysUntilFull() {
   if (D.update_snapshot_pinned) {
     hidden = `<div class="callout warn"><b>A macOS update is holding on to space</b>macOS has downloaded an update and is keeping a snapshot of your disk until it is installed. That space does not appear in Finder or anywhere below. Installing the update and restarting gives it back.</div>`;
   } else if (H.length >= 2) {
-    const a = H[H.length - 2], b = H[H.length - 1];
+    const a = baselineReading(), b = H[H.length - 1];
     const gap = -(b.free - a.free) - (b.used - a.used);
     hidden = gap > 2 * GB
       ? `<div class="callout warn"><b>About ${h(gap)} is being held by macOS</b>Since ${day(a.at)}, free space fell by more than your files grew. That difference is not in any folder. It is usually temporary space macOS keeps for an update or a backup; restarting or installing a pending update normally releases it.</div>`
@@ -496,7 +517,7 @@ renderLook();
 /* ---------- Space over time: the gap is the point ---------- */
 (() => {
   const el = $('history'), H = D.history, d = D.disk;
-  const HINT = '<p class="hint">Only today’s readings so far. Check back in a week: every diagnose and every weekly run adds one, and the shape worth watching is whether the coloured band keeps reaching the capacity line.</p>';
+  const HINT = '<p class="hint">Only today’s readings so far. Check back in a week: every scan and every hourly check adds one, and the shape worth watching is whether the coloured band keeps reaching the capacity line.</p>';
   if (H.length < 2 || !d) {
     el.innerHTML = `<h2>Space over time</h2><p class="empty">${H.length ? 'One reading so far.' : 'No readings yet.'}</p>${HINT}`;
     return;
@@ -516,6 +537,7 @@ renderLook();
     + ' ' + H.slice().reverse().map(r => `${X(r.at).toFixed(1)},${Y(lo(r)).toFixed(1)}`).join(' ');
   const line = f => H.map((r, i) => (i ? 'L' : 'M') + X(r.at).toFixed(1) + ' ' + Y(f(r)).toFixed(1)).join(' ');
   const last = H[H.length - 1], gap = d.total - last.used - last.free;
+  const T_ROWS = thinnedReadings();
   const young = last.at - H[0].at < 7 * 86400;
   el.innerHTML = `<h2>Space over time</h2>
     <div class="keys" style="margin-bottom:10px">
@@ -539,9 +561,9 @@ renderLook();
     </svg>
     <p class="cap">Blue is your files, orange is free space, and the gap up to the dashed line is macOS's own share, currently <b>${h(gap)}</b>. If that gap grows while free space shrinks, macOS is holding on to space (usually for an update) rather than your files growing.</p>
     ${young ? HINT : ''}
-    <details><summary>All ${H.length} readings</summary><div class="scroll"><table>
+    <details><summary>${T_ROWS.length === H.length ? `All ${H.length} readings` : `${H.length} readings, shown one a day beyond the last week`}</summary><div class="scroll"><table>
       <tr><th>When</th><th class="r">Your data</th><th class="r">Free</th><th class="r">Unaccounted</th></tr>
-      ${H.map(r => `<tr><td>${when(r.at)}</td><td class="r">${h(r.used)}</td><td class="r">${h(r.free)}</td><td class="r">${h(d.total - r.used - r.free)}</td></tr>`).join('')}
+      ${T_ROWS.map(r => `<tr><td>${when(r.at)}</td><td class="r">${h(r.used)}</td><td class="r">${h(r.free)}</td><td class="r">${h(d.total - r.used - r.free)}</td></tr>`).join('')}
     </table></div></details>`;
   const svg = $('hsvg'), cross = $('cross');
   svg.addEventListener('mousemove', e => {
