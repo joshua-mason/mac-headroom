@@ -407,7 +407,7 @@ fn rebuild_verdict(folder: &Path, kind: Rebuilt) -> (bool, String) {
     if found_upwards(project, locks) {
         (
             true,
-            format!("a lock file is kept with it, so {install} rebuilds it exactly"),
+            "a lock file is kept with it, so reinstalling rebuilds it exactly".to_string(),
         )
     } else {
         (
