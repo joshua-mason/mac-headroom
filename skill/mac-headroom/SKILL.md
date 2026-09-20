@@ -31,7 +31,10 @@ writes a self-contained HTML page and opens it in their browser. It is read-only
    means the figure is a floor, because the scan could not read everything without sudo. Report the entries
    with the largest positive `delta`. Look at what the directory actually is before
    suggesting deletion. A 30GB growth in a project folder may be a training run in
-   progress, not garbage.
+   progress, not garbage. An entry with an `access` field and no `delta` was readable in
+   only one of the two scans, usually because one ran with Full Disk Access and the
+   other without. It was neither created nor deleted, so never report it as growth or
+   as gone, and when `access_differs` is true do not quote the overall change either.
 3. Only then consider `mac-headroom --json clean` (a dry run). Caches recover a few GB
    at most. Present what it found and the `why_safe` text from `mac-headroom --json list`
    so the user can decide.

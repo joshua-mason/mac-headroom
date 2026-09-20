@@ -660,10 +660,14 @@ renderLook();
         ? `<div class="mid"></div><div class="bar ${r.v >= 0 ? 'pos' : 'neg'}" style="${r.v >= 0 ? 'left' : 'right'}:50%;width:${w}%"></div>`
         : `<div class="bar" style="left:0;width:${w}%"></div>`;
       const tag = r.rest || !r.node ? ''
+        : r.node.access === 'unreadable_now' ? '<span class="tag">not read this time</span>'
+        : r.node.access === 'unreadable_before' ? '<span class="tag">not read last time</span>'
         : change && r.node.previous == null ? '<span class="tag">new</span>'
         : change && r.node.bytes === 0 ? '<span class="tag">gone</span>' : '';
       const tipHtml = r.tipText ? `<b>${esc(r.label)}</b><br>${esc(r.tipText)}`
         : r.rest ? `<b>${esc(tilde(r.full || ''))}</b><br>not in any row below it: ${change ? sg(r.v) : h(r.v)}`
+        : r.node.access === 'unreadable_now' ? `<b>${esc(tilde(r.full))}</b><br>This scan was not allowed to read it, so there is no figure for now. It was ${h(r.node.previous)} last time. It has not been deleted.`
+        : r.node.access === 'unreadable_before' ? `<b>${esc(tilde(r.full))}</b><br>now ${h(r.node.bytes)}<br>The last scan was not allowed to read it, so this is not new and there is no change to report.`
         : `<b>${esc(tilde(r.full))}</b><br>now ${h(r.node.bytes)}` + (r.node.delta != null ? `<br>before ${r.node.previous == null ? 'not present' : h(r.node.previous)}<br>change ${sg(r.node.delta)}` : '');
       return `<div class="node${r.rest ? ' rest' : ''}${r.sum ? ' sum' : ''}${r.parent ? ' open' : ''}" data-i="${i}" data-tip="${esc(tipHtml)}">
         <div class="nm" style="padding-left:${r.depth * 20 + 16}px">
