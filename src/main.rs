@@ -99,6 +99,9 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Add a reading of used and free space to the timeline, and do nothing else.
+    /// For something that runs often and does its own alerting, such as the Mac app
+    Record,
     /// Write a self-contained HTML report of the same information and open it
     Report {
         /// Where to write it (default: the state directory)
@@ -336,6 +339,23 @@ fn main() {
                 emit(&v)
             } else {
                 volumes::print_text(&v)
+            }
+        }
+        Cmd::Record => {
+            let Some(r) = diag::record() else {
+                eprintln!("could not read diskutil info for /System/Volumes/Data");
+                std::process::exit(1);
+            };
+            if cli.json {
+                emit(&r)
+            } else if r.recorded {
+                println!(
+                    "Recorded: {} used, {} free.",
+                    util::human(r.used),
+                    util::human(r.free)
+                );
+            } else {
+                println!("Not recorded: the last reading is under fifty minutes old.");
             }
         }
         Cmd::Check { force } => {
