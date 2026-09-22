@@ -446,6 +446,42 @@ fn project_roots(h: &Path) -> Vec<PathBuf> {
 /// Folders found, each with its size on disk.
 type Sized = Vec<(PathBuf, u64)>;
 
+/// The manifests that make a folder beside them build output.
+const BUILD_MANIFESTS: [&str; 2] = ["Cargo.toml", "Package.swift"];
+
+/// Whether a directory is a build tool's output folder, going by more than
+/// its name. `target` is a common word; Cargo's has a Cargo.toml beside it
+/// and either its cache tag or a profile folder inside. SwiftPM's `.build`
+/// has a Package.swift beside it.
+fn is_build_output(dir: &Path) -> bool {
+    let (Some(name), Some(project)) = (dir.file_name().and_then(|n| n.to_str()), dir.parent())
+    else {
+        return false;
+    };
+    match name {
+        "target" => {
+            project.join("Cargo.toml").is_file()
+                && (dir.join("CACHEDIR.TAG").is_file()
+                    || dir.join("debug").is_dir()
+                    || dir.join("release").is_dir())
+        }
+        ".build" => project.join("Package.swift").is_file(),
+        _ => false,
+    }
+}
+
+/// The command that removes a folder properly. Cargo has its own; for the
+/// rest, removing the folder is the proper way.
+fn removal_command(path: &Path, kind: Rebuilt) -> String {
+    match (kind, path.parent()) {
+        (Rebuilt::BuildOutput, Some(project)) if project.join("Cargo.toml").is_file() => format!(
+            "cargo clean --manifest-path {}",
+            shell_quote(&project.join("Cargo.toml"))
+        ),
+        _ => format!("rm -rf {}", shell_quote(path)),
+    }
+}
+
 /// How many dependency folders to judge one by one. Each costs a few file
 /// checks and a git call, and a page listing two hundred helps nobody.
 const ITEMS_LISTED: usize = 15;
@@ -454,6 +490,8 @@ const ITEMS_LISTED: usize = 15;
 enum Rebuilt {
     NodeModules,
     Venv,
+    /// Compiled output: Cargo's `target`, SwiftPM's `.build`.
+    BuildOutput,
 }
 
 /// Whether a file with one of these names sits in `dir` or a folder above it,
@@ -479,7 +517,25 @@ fn rebuild_verdict(folder: &Path, kind: Rebuilt) -> (bool, String) {
     let Some(project) = folder.parent() else {
         return (false, "nothing says how to rebuild it".into());
     };
+    // Build output needs no lock file to be safe. It is made from the source
+    // beside it and from nothing else, so a build makes it again. What it
+    // costs is time, and the note says so.
+    if let Rebuilt::BuildOutput = kind {
+        return if BUILD_MANIFESTS.iter().any(|m| project.join(m).is_file()) {
+            (
+                true,
+                "compiled from the source beside it, so the next build makes it again, slowly the first time".to_string(),
+            )
+        } else {
+            (
+                false,
+                "no Cargo.toml or Package.swift beside it, so it may not be build output at all"
+                    .to_string(),
+            )
+        };
+    }
     let (manifests, locks): (&[&str], &[&str]) = match kind {
+        Rebuilt::BuildOutput => unreachable!("handled above"),
         Rebuilt::NodeModules => (
             &["package.json"],
             &[
@@ -505,7 +561,7 @@ fn rebuild_verdict(folder: &Path, kind: Rebuilt) -> (bool, String) {
     if !manifests.iter().any(|m| project.join(m).is_file()) {
         let expected = match kind {
             Rebuilt::NodeModules => "no package.json beside it",
-            Rebuilt::Venv => "no project file beside it",
+            Rebuilt::Venv | Rebuilt::BuildOutput => "no project file beside it",
         };
         return (
             false,
@@ -566,7 +622,7 @@ fn rebuildable_items(found: &[(PathBuf, u64)], kind: Rebuilt) -> Vec<Item> {
                 safe,
                 note: format!("{why}{worked}"),
                 command: if safe {
-                    format!("rm -rf {}", shell_quote(path))
+                    removal_command(path, kind)
                 } else {
                     String::new()
                 },
@@ -577,8 +633,9 @@ fn rebuildable_items(found: &[(PathBuf, u64)], kind: Rebuilt) -> Vec<Item> {
 
 /// Dependency folders a project re-creates on install: node_modules, and
 /// Python virtual environments (recognised by their pyvenv.cfg).
-fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized) {
-    let (mut node, mut venv, mut trees) = (Vec::new(), Vec::new(), Vec::new());
+fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized, Sized) {
+    let (mut node, mut venv, mut trees, mut built) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for root in roots {
         let mut it = walkdir::WalkDir::new(root)
             .max_depth(6)
@@ -600,6 +657,9 @@ fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized) {
             {
                 trees.push((e.path().to_path_buf(), disk_usage(e.path())));
                 it.skip_current_dir();
+            } else if is_build_output(e.path()) {
+                built.push((e.path().to_path_buf(), disk_usage(e.path())));
+                it.skip_current_dir();
             } else if name == ".git" || name == "Library" || name == ".Trash" {
                 it.skip_current_dir();
             } else if e.path().join("pyvenv.cfg").is_file() {
@@ -608,7 +668,7 @@ fn dependency_folders(roots: &[PathBuf]) -> (Sized, Sized, Sized) {
             }
         }
     }
-    (node, venv, trees)
+    (node, venv, trees, built)
 }
 
 fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: &str, how: &str) {
@@ -719,9 +779,12 @@ pub fn detections() -> Vec<Detection> {
         "Full backups of devices made on this Mac. They can be very large, and old ones are easy to forget.",
         "In Finder, select your device in the sidebar and choose Manage Backups to delete old ones.");
 
-    let (node, venv, trees) = dependency_folders(&project_roots(&h));
+    let (node, venv, trees, built) = dependency_folders(&project_roots(&h));
     let trees_found: Vec<PathBuf> = trees.iter().map(|(p, _)| p.clone()).collect();
-    let (node_found, venv_found) = (node.clone(), venv.clone());
+    let (node_found, venv_found, built_found) = (node.clone(), venv.clone(), built.clone());
+    grouped(&mut out, built, "build-folders", "Project build folders",
+        "Compiled output that Rust and Swift keep beside a project's source. It grows with every build and is never cleared on its own.",
+        "Delete the build folder of projects you are not working on. The next build makes it again from the source, from scratch, so expect that one build to be slow.");
     grouped(&mut out, node, "node-modules", "JavaScript project dependencies",
         "Each JavaScript project keeps a node_modules folder of the libraries it uses. They add up quickly across many projects.",
         "Delete node_modules in projects you are not working on. Running `npm install` in a project brings it back.");
@@ -739,6 +802,7 @@ pub fn detections() -> Vec<Detection> {
     for (id, found, kind) in [
         ("node-modules", node_found, Rebuilt::NodeModules),
         ("python-venvs", venv_found, Rebuilt::Venv),
+        ("build-folders", built_found, Rebuilt::BuildOutput),
     ] {
         if let Some(d) = out.iter_mut().find(|d| d.id == id) {
             d.items = rebuildable_items(&found, kind);
@@ -1068,6 +1132,53 @@ mod tests {
             assert_eq!(item.safe, item.command.starts_with("rm -rf '"));
         }
         assert!(items.iter().any(|i| i.safe) && items.iter().any(|i| !i.safe));
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `target` is a common word. Only Cargo's counts, and only SwiftPM's
+    /// `.build`: a folder that merely has the name is somebody's files.
+    #[test]
+    fn a_build_folder_is_recognised_by_more_than_its_name() {
+        let root = scratch("built");
+        let cargo = root.join("tool/target");
+        fs::create_dir_all(cargo.join("debug")).unwrap();
+        fs::write(root.join("tool/Cargo.toml"), "").unwrap();
+        let swift = root.join("app/.build");
+        fs::create_dir_all(&swift).unwrap();
+        fs::write(root.join("app/Package.swift"), "").unwrap();
+        // A folder called target that is nothing to do with Cargo.
+        let archery = root.join("archery/target");
+        fs::create_dir_all(archery.join("debug")).unwrap();
+        // Beside a Cargo.toml, but with nothing of Cargo's inside.
+        let empty = root.join("odd/target");
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(root.join("odd/Cargo.toml"), "").unwrap();
+
+        assert!(is_build_output(&cargo));
+        assert!(is_build_output(&swift));
+        assert!(!is_build_output(&archery));
+        assert!(!is_build_output(&empty));
+
+        let items = rebuildable_items(
+            &[(cargo.clone(), 10), (swift.clone(), 5)],
+            Rebuilt::BuildOutput,
+        );
+        assert!(items.iter().all(|i| i.safe));
+        // Cargo has its own way to clear its output; use it.
+        assert!(
+            items[0]
+                .command
+                .starts_with("cargo clean --manifest-path '"),
+            "{}",
+            items[0].command
+        );
+        assert!(
+            items[1].command.starts_with("rm -rf '"),
+            "{}",
+            items[1].command
+        );
+        // Judged as build output with no manifest beside it: never safe.
+        assert!(!rebuild_verdict(&archery, Rebuilt::BuildOutput).0);
         fs::remove_dir_all(&root).unwrap();
     }
 }
