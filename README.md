@@ -27,6 +27,7 @@ mac-headroom schedule run      # do the weekly routine now
 mac-headroom schedule uninstall
 mac-headroom volumes           # what else shares this disk, and what a scan cannot reach
 mac-headroom check             # is free space low? notify and write a report if so
+mac-headroom record            # add a reading to the timeline and nothing else
 ```
 
 ## Principles

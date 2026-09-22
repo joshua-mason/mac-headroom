@@ -181,6 +181,27 @@ pub fn record_if_due(d: &Disk, min_gap: u64) -> bool {
     due
 }
 
+/// What `record` did.
+#[derive(Serialize)]
+pub struct Recorded {
+    /// False when the last reading was too recent for another to add anything.
+    pub recorded: bool,
+    pub used: u64,
+    pub free: u64,
+}
+
+/// Measure the disk and add a reading, if one is due. It writes nothing else,
+/// compares nothing and notifies nobody: `check` does all three, and a caller
+/// with its own low-space warning would otherwise send two.
+pub fn record() -> Option<Recorded> {
+    let d = disk()?;
+    Some(Recorded {
+        recorded: record_if_due(&d, CHECK_READING_GAP_SECS),
+        used: d.used,
+        free: d.free,
+    })
+}
+
 /// Local APFS snapshots. A staged macOS update leaves `com.apple.os.update-*`
 /// entries here, and those pin space that `du` cannot see.
 pub fn snapshots() -> Vec<String> {
