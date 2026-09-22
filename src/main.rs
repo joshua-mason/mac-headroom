@@ -422,6 +422,13 @@ struct Overview {
     /// app gets its own answer, a terminal gets the terminal's.
     #[serde(skip_serializing_if = "Option::is_none")]
     full_disk_access: Option<bool>,
+    /// The last week of readings and what they add up to. Absent only when
+    /// the disk could not be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trend: Option<diag::Trend>,
+    /// A staged macOS update's snapshot is on the disk. It holds space until
+    /// the update is installed, and no file scan will find it.
+    update_snapshot_pinned: bool,
 }
 
 #[derive(Serialize)]
@@ -456,10 +463,18 @@ fn overview() -> Overview {
     let growth_scans = std::fs::read_dir(dir.join("growth"))
         .map(|rd| rd.flatten().count())
         .unwrap_or(0);
+    let disk = diag::disk();
+    let trend = disk
+        .as_ref()
+        .map(|d| diag::trend(&diag::history(), util::now(), d.free));
     Overview {
         findings: findings::load_current(),
         full_disk_access: util::full_disk_access(),
-        disk: diag::disk().map(|d| DiskNow {
+        trend,
+        update_snapshot_pinned: diag::snapshots()
+            .iter()
+            .any(|n| n.contains("com.apple.os.update")),
+        disk: disk.map(|d| DiskNow {
             used: d.used,
             free: d.free,
             total: d.total,
@@ -485,6 +500,12 @@ fn print_overview(o: &Overview) {
             human(d.used)
         ),
         None => println!("Disk    unavailable (diskutil failed)"),
+    }
+    if let Some(t) = &o.trend {
+        println!("Trend   {}", diag::trend_sentence(t));
+    }
+    if o.update_snapshot_pinned {
+        println!("        macOS is holding space for a staged update; install it and restart to get it back");
     }
     println!();
     config::print_check(&o.config);

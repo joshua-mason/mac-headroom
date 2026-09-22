@@ -154,6 +154,77 @@ pub fn baseline(rows: &[Reading], now: u64) -> Option<Reading> {
         .copied()
 }
 
+/// The last week of readings and what they add up to, for anything that
+/// shows the trend without wanting to do the arithmetic itself.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Trend {
+    /// Readings from the last seven days, oldest first.
+    pub readings: Vec<Reading>,
+    /// When the oldest of them was taken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
+    /// Free space now, less free space at `since`. Negative means less free
+    /// than a week ago. Absent until the record spans a day, because two
+    /// readings an hour apart say nothing about the week.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_change: Option<i64>,
+    /// At the week's rate, days until nothing is free. Only when free space
+    /// is falling and the answer is under a year: it is an extrapolation of
+    /// one week, and past that it would be a number with no meaning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_in_days: Option<f64>,
+}
+
+pub const TREND_WINDOW_SECS: u64 = 7 * 24 * 3600;
+const TREND_MIN_SPAN_SECS: u64 = 24 * 3600;
+
+pub fn trend(rows: &[Reading], now: u64, free_now: u64) -> Trend {
+    let readings: Vec<Reading> = rows
+        .iter()
+        .filter(|r| now.saturating_sub(r.at) <= TREND_WINDOW_SECS)
+        .copied()
+        .collect();
+    let first = readings.first().copied();
+    let spans_a_day = first.is_some_and(|f| now.saturating_sub(f.at) >= TREND_MIN_SPAN_SECS);
+    let free_change = if spans_a_day {
+        first.map(|f| free_now as i64 - f.free as i64)
+    } else {
+        None
+    };
+    let full_in_days = match (first, free_change) {
+        (Some(f), Some(change)) if change < 0 => {
+            let per_sec = (-change) as f64 / (now - f.at) as f64;
+            let days = free_now as f64 / per_sec / 86_400.0;
+            (days < 365.0).then_some((days * 10.0).round() / 10.0)
+        }
+        _ => None,
+    };
+    Trend {
+        readings,
+        since: first.map(|f| f.at),
+        free_change,
+        full_in_days,
+    }
+}
+
+/// One line for the terminal: what the week's readings say.
+pub fn trend_sentence(t: &Trend) -> String {
+    match (t.free_change, t.full_in_days) {
+        (None, _) => match t.readings.len() {
+            0 => "no readings yet".to_string(),
+            n => format!(
+                "{n} reading{} so far; a day of them is needed",
+                if n == 1 { "" } else { "s" }
+            ),
+        },
+        (Some(change), Some(days)) => format!(
+            "{} free this week; full in about {days:.0} days at this rate",
+            signed(change)
+        ),
+        (Some(change), None) => format!("{} free this week", signed(change)),
+    }
+}
+
 fn append_reading(d: &Disk, at: u64) {
     if let Ok(mut f) = fs::OpenOptions::new()
         .create(true)
@@ -352,6 +423,67 @@ mod tests {
         // A clock that went backwards must not stop readings for good... but
         // it must not write one a second either.
         assert!(!reading_is_due(&[at(now + 50)], now, 3000));
+    }
+
+    fn free_at(at: u64, free: u64) -> Reading {
+        Reading {
+            at,
+            used: 500 * 1_000_000_000 - free,
+            free,
+        }
+    }
+
+    #[test]
+    fn trend_keeps_a_week_and_says_how_free_space_moved() {
+        let day = 24 * 3600;
+        let gb = 1_000_000_000u64;
+        let now = 100 * day;
+        let rows = vec![
+            free_at(now - 10 * day, 90 * gb),
+            free_at(now - 6 * day, 60 * gb),
+            free_at(now - 3 * day, 55 * gb),
+            free_at(now - 3600, 51 * gb),
+        ];
+        let t = trend(&rows, now, 50 * gb);
+        assert_eq!(t.readings.len(), 3, "the ten-day-old reading is out");
+        assert_eq!(t.since, Some(now - 6 * day));
+        assert_eq!(t.free_change, Some(-10 * gb as i64));
+        // 10 GB in 6 days, 50 GB left: 30 days.
+        assert_eq!(t.full_in_days, Some(30.0));
+        assert_eq!(
+            trend_sentence(&t),
+            "-10 GB free this week; full in about 30 days at this rate"
+        );
+    }
+
+    #[test]
+    fn trend_says_nothing_until_the_record_spans_a_day() {
+        let gb = 1_000_000_000u64;
+        let now = 1_000_000;
+        let rows = vec![free_at(now - 7200, 60 * gb), free_at(now - 3600, 55 * gb)];
+        let t = trend(&rows, now, 50 * gb);
+        assert_eq!(t.readings.len(), 2);
+        assert_eq!(t.free_change, None);
+        assert_eq!(t.full_in_days, None);
+        assert_eq!(
+            trend_sentence(&t),
+            "2 readings so far; a day of them is needed"
+        );
+        assert_eq!(trend_sentence(&trend(&[], now, 50 * gb)), "no readings yet");
+    }
+
+    #[test]
+    fn trend_has_no_full_date_when_free_space_grew_or_barely_moves() {
+        let day = 24 * 3600;
+        let gb = 1_000_000_000u64;
+        let now = 100 * day;
+        let grew = trend(&[free_at(now - 2 * day, 40 * gb)], now, 50 * gb);
+        assert_eq!(grew.free_change, Some(10 * gb as i64));
+        assert_eq!(grew.full_in_days, None);
+        assert_eq!(trend_sentence(&grew), "+10 GB free this week");
+        // 1 MB a week off 50 GB is centuries away, and not worth a number.
+        let crawl = trend(&[free_at(now - 7 * day, 50 * gb + 1_000_000)], now, 50 * gb);
+        assert_eq!(crawl.full_in_days, None);
     }
 
     #[test]
