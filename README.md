@@ -16,7 +16,7 @@ mac-headroom clean --yes       # actually delete
 mac-headroom clean --only chrome-cache --only spotify-cache --yes
 mac-headroom --json <any>      # machine-readable output
 
-mac-headroom status            # one screen: disk, config, weekly job, recorded history
+mac-headroom status            # one screen: disk, this week's trend, config, weekly job
 mac-headroom report            # the same as a self-contained HTML page, opened in your browser
 mac-headroom config init       # write a commented example config
 mac-headroom config check      # validate it and list what it defines
