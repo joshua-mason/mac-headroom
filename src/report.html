@@ -438,7 +438,7 @@ function renderLook() {
       ${(x.items || []).length ? `<div class="items" style="margin-top:10px">${x.items.map(i => `
         <div class="item">
           <div class="size">${h(i.bytes)}</div>
-          <div><span class="title">${esc(tilde(i.path).split('/').slice(-4).join('/'))}</span><span class="chip ${i.safe ? '' : 'warn'}">${i.safe ? 'Nothing to lose' : 'Check first'}</span>
+          <div><span class="title">${esc(i.label || tilde(i.path).split('/').slice(-4).join('/'))}</span><span class="chip ${i.safe ? '' : 'warn'}">${i.safe ? 'Nothing to lose' : 'Check first'}</span>
             <p>${esc(i.note)}</p>
             ${i.command ? `<div class="cmdbox" style="margin-top:8px"><span class="cmd" style="overflow-wrap:anywhere">${esc(i.command)}</span>${copyBtn(i.command)}</div>` : ''}</div>
         </div>`).join('')}</div>` : ''}

@@ -53,6 +53,12 @@ pub struct Action {
 #[derive(Serialize, Deserialize)]
 pub struct Item {
     pub path: String,
+    /// The folder named the way a person thinks of their project: from the
+    /// repository down (`epilude-2/www/node_modules`), or for a working copy,
+    /// its own folder name. Several projects have a `www` or `client` folder,
+    /// and the path's last two parts alone read the same for all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub bytes: u64,
     /// True only when removing it would lose nothing, and that was checked
     /// rather than assumed. Anything that could not be checked is not safe.
@@ -177,6 +183,7 @@ fn worktree_items(dirs: &[PathBuf]) -> Vec<Item> {
                 format!("{}, last touched {touched}", parts.join(" and "))
             };
             out.push(Item {
+                label: label_for(&wt),
                 path: p.clone(),
                 bytes,
                 safe,
@@ -600,6 +607,67 @@ fn last_worked_on(project: &Path) -> Option<u64> {
         })
 }
 
+/// How far up to look for a repository before giving up, so a folder outside
+/// any repository does not walk all the way to `/`.
+const LABEL_MAX_DEPTH: usize = 6;
+
+/// Folder names that say nothing about which project a folder is in.
+const GENERIC_NAMES: [&str; 17] = [
+    "www", "web", "client", "frontend", "site", "app", "ui", "server", "backend", "api", "service",
+    "packages", "apps", "src", "lib", "examples", "docs",
+];
+
+/// At most this many generic names are walked past, because some of them are
+/// sometimes a real project's name.
+const GENERIC_STEPS: usize = 2;
+
+/// Names a folder from the project it belongs to. The nearest repository
+/// above it wins, and a working copy that is itself a repository is named by
+/// its own folder. Outside any repository, generic parents such as `www` are
+/// walked past to the first name that says which project it is. None when
+/// there is nothing better than the folder's own name.
+fn project_label(path: &Path, is_repo_root: impl Fn(&Path) -> bool) -> Option<String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let from = |top: &Path| -> Option<String> {
+        let rest = path.strip_prefix(top).ok()?;
+        let mut label = name(top)?;
+        for part in rest.components() {
+            label.push('/');
+            label.push_str(&part.as_os_str().to_string_lossy());
+        }
+        Some(label)
+    };
+    if is_repo_root(path) {
+        return name(path);
+    }
+    if let Some(repo) = path
+        .ancestors()
+        .skip(1)
+        .take(LABEL_MAX_DEPTH)
+        .find(|a| name(a).is_some() && is_repo_root(a))
+    {
+        return from(repo);
+    }
+    let mut top = path.parent()?;
+    for _ in 0..GENERIC_STEPS {
+        let generic = name(top).is_some_and(|n| GENERIC_NAMES.contains(&n.to_lowercase().as_str()));
+        match top.parent() {
+            Some(up) if generic && name(up).is_some() => top = up,
+            _ => break,
+        }
+    }
+    from(top)
+}
+
+/// `project_label` against the disk. A `.git` folder marks a normal checkout
+/// and a `.git` file a git worktree; both count. The home folder does not,
+/// since some people keep their dotfiles in a repository there, and every
+/// project under it would otherwise be named after it.
+fn label_for(path: &Path) -> Option<String> {
+    let h = home();
+    project_label(path, |p| p != h && p.join(".git").exists())
+}
+
 /// The largest dependency folders, each with whether it can be rebuilt
 /// exactly and how long the project has sat untouched. The tool removes none
 /// of them: which projects someone is finished with is theirs to say.
@@ -617,6 +685,7 @@ fn rebuildable_items(found: &[(PathBuf, u64)], kind: Rebuilt) -> Vec<Item> {
                 .map(|at| format!(", project last worked on {}", crate::util::ago(at)))
                 .unwrap_or_default();
             Item {
+                label: label_for(path),
                 path: path.display().to_string(),
                 bytes: *bytes,
                 safe,
@@ -1179,6 +1248,103 @@ mod tests {
         );
         // Judged as build output with no manifest beside it: never safe.
         assert!(!rebuild_verdict(&archery, Rebuilt::BuildOutput).0);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn label(path: &str, repos: &[&str]) -> Option<String> {
+        project_label(Path::new(path), |p| repos.iter().any(|r| Path::new(r) == p))
+    }
+
+    /// Several projects have a `www` folder, so a folder is named from its
+    /// repository rather than from its parent alone.
+    #[test]
+    fn a_folder_is_named_from_its_repository() {
+        assert_eq!(
+            label(
+                "/Users/x/git/epilude-2/www/node_modules",
+                &["/Users/x/git/epilude-2"]
+            )
+            .as_deref(),
+            Some("epilude-2/www/node_modules")
+        );
+        // The nearest repository wins: a worktree inside another project.
+        let shop = "/Users/x/git/shop";
+        let chip = "/Users/x/git/shop/.claude/worktrees/chip";
+        assert_eq!(
+            label(&format!("{chip}/www/node_modules"), &[shop, chip]).as_deref(),
+            Some("chip/www/node_modules")
+        );
+        // A working copy is named by its own folder.
+        assert_eq!(label(chip, &[shop, chip]).as_deref(), Some("chip"));
+    }
+
+    #[test]
+    fn a_repository_too_far_up_is_not_looked_for() {
+        assert_eq!(
+            label("/r/a/b/c/d/e/f/node_modules", &["/r"]).as_deref(),
+            Some("f/node_modules")
+        );
+        assert_eq!(
+            label("/r/a/b/c/d/e/node_modules", &["/r"]).as_deref(),
+            Some("r/a/b/c/d/e/node_modules")
+        );
+    }
+
+    #[test]
+    fn outside_a_repository_generic_parents_are_walked_past() {
+        assert_eq!(
+            label("/Users/x/scratch/www/node_modules", &[]).as_deref(),
+            Some("scratch/www/node_modules")
+        );
+        assert_eq!(
+            label("/Users/x/court-tracker/node_modules", &[]).as_deref(),
+            Some("court-tracker/node_modules")
+        );
+        assert_eq!(
+            label("/Users/x/shop/apps/Web/node_modules", &[]).as_deref(),
+            Some("shop/apps/Web/node_modules")
+        );
+        // Two generic steps at most, since `app` can be a real project's
+        // name: it is kept rather than walked past to `x`.
+        assert_eq!(
+            label("/Users/x/app/src/www/node_modules", &[]).as_deref(),
+            Some("app/src/www/node_modules")
+        );
+        // Nothing to walk up to.
+        assert_eq!(
+            label("/www/node_modules", &[]).as_deref(),
+            Some("www/node_modules")
+        );
+        assert_eq!(label("/", &[]), None);
+    }
+
+    /// Against the disk: a `.git` folder and a worktree's `.git` file both
+    /// mark a repository.
+    #[test]
+    fn a_git_folder_or_file_marks_a_repository() {
+        let root = scratch("labels");
+        let deps = root.join("epilude-2/www/node_modules");
+        fs::create_dir_all(root.join("epilude-2/.git")).unwrap();
+        fs::create_dir_all(&deps).unwrap();
+        let chip = root.join("epilude-2/.claude/worktrees/chip");
+        fs::create_dir_all(chip.join("client/node_modules")).unwrap();
+        fs::write(chip.join(".git"), "gitdir: elsewhere\n").unwrap();
+        let loose = root.join("scratch/www/node_modules");
+        fs::create_dir_all(&loose).unwrap();
+
+        assert_eq!(
+            label_for(&deps).as_deref(),
+            Some("epilude-2/www/node_modules")
+        );
+        assert_eq!(
+            label_for(&chip.join("client/node_modules")).as_deref(),
+            Some("chip/client/node_modules")
+        );
+        assert_eq!(label_for(&chip).as_deref(), Some("chip"));
+        assert_eq!(
+            label_for(&loose).as_deref(),
+            Some("scratch/www/node_modules")
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 }
