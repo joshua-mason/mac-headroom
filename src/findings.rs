@@ -54,9 +54,10 @@ pub struct Action {
 pub struct Item {
     pub path: String,
     /// The folder named the way a person thinks of their project: from the
-    /// repository down (`epilude-2/www/node_modules`), or for a working copy,
-    /// its own folder name. Several projects have a `www` or `client` folder,
-    /// and the path's last two parts alone read the same for all of them.
+    /// repository down (`epilude-2/www/node_modules`), and for a working copy,
+    /// from the repository that owns it (`epilude-2/…/chip`). Several
+    /// projects have a `www` or `client` folder, and the path's last two parts
+    /// alone read the same for all of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub bytes: u64,
@@ -622,15 +623,34 @@ const GENERIC_NAMES: [&str; 17] = [
 const GENERIC_STEPS: usize = 2;
 
 /// Names a folder from the project it belongs to. The nearest repository
-/// above it wins, and a working copy that is itself a repository is named by
-/// its own folder. Outside any repository, generic parents such as `www` are
-/// walked past to the first name that says which project it is. None when
+/// above it wins. A repository inside another one, such as an agent's working
+/// copy under `.claude/worktrees`, is named from the repository that owns it,
+/// with the folders between collapsed: `shop/…/chip`, or `shop/chip` when it
+/// sits directly inside. Outside any repository, generic parents such as `www`
+/// are walked past to the first name that says which project it is. None when
 /// there is nothing better than the folder's own name.
 fn project_label(path: &Path, is_repo_root: impl Fn(&Path) -> bool) -> Option<String> {
     let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
-    let from = |top: &Path| -> Option<String> {
+    let nearest = |p: &Path| {
+        p.ancestors()
+            .skip(1)
+            .take(LABEL_MAX_DEPTH)
+            .find(|a| name(a).is_some() && is_repo_root(a))
+            .map(Path::to_path_buf)
+    };
+    // A repository, prefixed with the one that owns it when there is one.
+    let repo_name = |repo: &Path| -> Option<String> {
+        let own = name(repo)?;
+        Some(match nearest(repo) {
+            Some(owner) if repo.parent() == Some(owner.as_path()) => {
+                format!("{}/{own}", name(&owner)?)
+            }
+            Some(owner) => format!("{}/…/{own}", name(&owner)?),
+            None => own,
+        })
+    };
+    let from = |top: &Path, mut label: String| -> Option<String> {
         let rest = path.strip_prefix(top).ok()?;
-        let mut label = name(top)?;
         for part in rest.components() {
             label.push('/');
             label.push_str(&part.as_os_str().to_string_lossy());
@@ -638,15 +658,10 @@ fn project_label(path: &Path, is_repo_root: impl Fn(&Path) -> bool) -> Option<St
         Some(label)
     };
     if is_repo_root(path) {
-        return name(path);
+        return repo_name(path);
     }
-    if let Some(repo) = path
-        .ancestors()
-        .skip(1)
-        .take(LABEL_MAX_DEPTH)
-        .find(|a| name(a).is_some() && is_repo_root(a))
-    {
-        return from(repo);
+    if let Some(repo) = nearest(path) {
+        return from(&repo, repo_name(&repo)?);
     }
     let mut top = path.parent()?;
     for _ in 0..GENERIC_STEPS {
@@ -656,7 +671,7 @@ fn project_label(path: &Path, is_repo_root: impl Fn(&Path) -> bool) -> Option<St
             _ => break,
         }
     }
-    from(top)
+    from(top, name(top)?)
 }
 
 /// `project_label` against the disk. A `.git` folder marks a normal checkout
@@ -1267,15 +1282,35 @@ mod tests {
             .as_deref(),
             Some("epilude-2/www/node_modules")
         );
-        // The nearest repository wins: a worktree inside another project.
+        // The nearest repository wins: a worktree inside another project,
+        // which is itself named from the project that owns it.
         let shop = "/Users/x/git/shop";
         let chip = "/Users/x/git/shop/.claude/worktrees/chip";
         assert_eq!(
             label(&format!("{chip}/www/node_modules"), &[shop, chip]).as_deref(),
-            Some("chip/www/node_modules")
+            Some("shop/…/chip/www/node_modules")
         );
-        // A working copy is named by its own folder.
-        assert_eq!(label(chip, &[shop, chip]).as_deref(), Some("chip"));
+    }
+
+    /// Every agent's working copy has a name like `slack-channel-split`, which
+    /// on its own does not say which project it is a copy of.
+    #[test]
+    fn a_working_copy_is_named_from_the_repository_that_owns_it() {
+        let shop = "/Users/x/git/shop";
+        let chip = "/Users/x/git/shop/.claude/worktrees/chip";
+        assert_eq!(label(chip, &[shop, chip]).as_deref(), Some("shop/…/chip"));
+        // Directly inside the repository there is nothing to collapse.
+        let beside = "/Users/x/git/shop/chip";
+        assert_eq!(label(beside, &[shop, beside]).as_deref(), Some("shop/chip"));
+        // With no repository around it, its own name is all there is.
+        assert_eq!(label(chip, &[chip]).as_deref(), Some("chip"));
+        // An owner beyond the capped walk is not looked for.
+        let deep = "/r/a/b/c/d/e/f/chip";
+        assert_eq!(label(deep, &["/r", deep]).as_deref(), Some("chip"));
+        assert_eq!(
+            label("/r/a/b/c/d/chip", &["/r", "/r/a/b/c/d/chip"]).as_deref(),
+            Some("r/…/chip")
+        );
     }
 
     #[test]
@@ -1338,9 +1373,14 @@ mod tests {
         );
         assert_eq!(
             label_for(&chip.join("client/node_modules")).as_deref(),
-            Some("chip/client/node_modules")
+            Some("epilude-2/…/chip/client/node_modules")
         );
-        assert_eq!(label_for(&chip).as_deref(), Some("chip"));
+        assert_eq!(label_for(&chip).as_deref(), Some("epilude-2/…/chip"));
+        // A working copy with no repository around it keeps its own name.
+        let lone = root.join("loose-copies/solo");
+        fs::create_dir_all(&lone).unwrap();
+        fs::write(lone.join(".git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(label_for(&lone).as_deref(), Some("solo"));
         assert_eq!(
             label_for(&loose).as_deref(),
             Some("scratch/www/node_modules")
