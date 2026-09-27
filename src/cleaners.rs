@@ -210,6 +210,62 @@ pub fn builtins() -> Vec<Cleaner> {
             "Images and files Chrome saved to load websites faster. Your bookmarks, passwords, history and logins are not touched.",
         ),
         paths(
+            "firefox-cache",
+            "Firefox HTTP cache (profile data untouched)",
+            "Only the cache2 folder under ~/Library/Caches/Firefox/Profiles. History, cookies, logins and bookmarks live in the profile under Application Support and are never touched. Skipped while Firefox is open.",
+            Some("firefox"),
+            &["~/Library/Caches/Firefox/Profiles/*/cache2"],
+        )
+        .with_plain(
+            "Firefox's web cache",
+            "Images and files Firefox saved so websites load faster. Your history, bookmarks, passwords and logins stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
+        ),
+        paths(
+            "brave-cache",
+            "Brave HTTP, code and GPU caches (profile data untouched)",
+            "Only ~/Library/Caches/BraveSoftware/Brave-Browser, the same three folders as Chrome's: Brave is Chromium underneath and keeps its cache in the same shape. Cookies, history and logins live under Application Support and are never touched. Skipped while Brave is open.",
+            Some("Brave Browser"),
+            &[
+                "~/Library/Caches/BraveSoftware/Brave-Browser/*/Cache",
+                "~/Library/Caches/BraveSoftware/Brave-Browser/*/Code Cache",
+                "~/Library/Caches/BraveSoftware/Brave-Browser/*/GPUCache",
+            ],
+        )
+        .with_plain(
+            "Brave's web cache",
+            "Images and files Brave saved so websites load faster. Your history, bookmarks, passwords and logins stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
+        ),
+        paths(
+            "edge-cache",
+            "Microsoft Edge HTTP, code and GPU caches (profile data untouched)",
+            "Only ~/Library/Caches/Microsoft Edge, the same three folders as Chrome's: Edge is Chromium underneath and keeps its cache in the same shape. Cookies, history and logins live under Application Support and are never touched. Skipped while Edge is open.",
+            Some("Microsoft Edge"),
+            &[
+                "~/Library/Caches/Microsoft Edge/*/Cache",
+                "~/Library/Caches/Microsoft Edge/*/Code Cache",
+                "~/Library/Caches/Microsoft Edge/*/GPUCache",
+            ],
+        )
+        .with_plain(
+            "Edge's web cache",
+            "Images and files Microsoft Edge saved so websites load faster. Your history, bookmarks, passwords and logins stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
+        ),
+        paths(
+            "arc-cache",
+            "Arc HTTP, code and GPU caches (profile data untouched)",
+            "Arc keeps its Chromium cache beside its profile, under Application Support rather than Caches, so the three cache folders there are matched by name and nothing else in the profile is: cookies, history, logins and Arc's own spaces and sidebar sit in other folders of the same directory and are never touched. Skipped while Arc is open.",
+            Some("Arc"),
+            &[
+                "~/Library/Application Support/Arc/User Data/*/Cache",
+                "~/Library/Application Support/Arc/User Data/*/Code Cache",
+                "~/Library/Application Support/Arc/User Data/*/GPUCache",
+            ],
+        )
+        .with_plain(
+            "Arc's web cache",
+            "Images and files Arc saved so websites load faster. Your history, bookmarks, passwords, logins, spaces and sidebar stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
+        ),
+        paths(
             "terraform-plugins",
             "Terraform's shared provider plugin cache",
             "A download cache kept so repeated `terraform init` runs are fast. A project that used it may hold links into it, so the next init in that project downloads again. Nothing is lost but the download.",
