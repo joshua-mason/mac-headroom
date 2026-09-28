@@ -897,6 +897,27 @@ pub fn detections() -> Vec<Detection> {
         }
     }
 
+    let apps = crate::apps::find();
+    let app_bytes: u64 = apps.iter().map(|a| a.bytes).sum();
+    if app_bytes >= WORTH_A_LOOK {
+        let at = now();
+        out.push(Detection {
+            id: "unused-apps".into(),
+            title: format!("Apps not opened in six months ({} apps)", apps.len()),
+            bytes: app_bytes,
+            what: "Apps in your Applications folder that nothing shows you opening for six months or more. An editor tried once or a tool from an old course can be a gigabyte or two, and nothing on the Mac ever points it out.".into(),
+            how: "Move the ones you have finished with to the Trash: drag them there in Finder, or copy a command below. The Trash keeps an app until you empty it, so you can put one back. If an app has a subscription or a licence, sign out of it first.".into(),
+            path: None,
+            largest: apps
+                .iter()
+                .take(5)
+                .map(|a| (a.path.display().to_string(), a.bytes))
+                .collect(),
+            actions: vec![],
+            items: crate::apps::items(&apps, at),
+        });
+    }
+
     if !crate::util::skipping_protected() && !is_running("WhatsApp") {
         if let Ok(orphans) = crate::orphans::find(&crate::orphans::WHATSAPP) {
             let bytes: u64 = orphans.iter().map(|p| disk_usage(p)).sum();

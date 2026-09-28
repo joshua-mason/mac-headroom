@@ -1,4 +1,5 @@
 mod alert;
+mod apps;
 mod cleaners;
 mod config;
 mod diag;
