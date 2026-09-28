@@ -69,6 +69,13 @@ pub struct Item {
     /// The command that removes it properly. Only given when `safe`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub command: String,
+    /// The same command for something the tool could not vouch for, for a
+    /// person who has looked and decided for themselves. Given whether or
+    /// not `safe`, and never for a working copy: git's own command refuses
+    /// one with uncommitted work, and forcing it would lose the work. A
+    /// caller shows it behind a warning that says why the tool would not.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub removal: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -198,6 +205,7 @@ fn worktree_items(dirs: &[PathBuf]) -> Vec<Item> {
                 } else {
                     String::new()
                 },
+                removal: String::new(),
             });
         }
     }
@@ -710,6 +718,7 @@ fn rebuildable_items(found: &[(PathBuf, u64)], kind: Rebuilt) -> Vec<Item> {
                 } else {
                     String::new()
                 },
+                removal: removal_command(path, kind),
             }
         })
         .collect()
@@ -1235,6 +1244,8 @@ mod tests {
         for item in &items {
             assert_eq!(item.safe, !item.command.is_empty());
             assert_eq!(item.safe, item.command.starts_with("rm -rf '"));
+            // Withheld as a command, still there for someone who has decided.
+            assert!(item.removal.starts_with("rm -rf '"), "{}", item.removal);
         }
         assert!(items.iter().any(|i| i.safe) && items.iter().any(|i| !i.safe));
         fs::remove_dir_all(&root).unwrap();

@@ -296,6 +296,7 @@ pub fn items(apps: &[UnusedApp], now: u64) -> Vec<Item> {
                 } else {
                     String::new()
                 },
+                removal: trash_command(&app.path),
             }
         })
         .collect()
@@ -380,5 +381,9 @@ mod tests {
         assert_eq!(items[0].label.as_deref(), Some("Old"));
         assert!(items[0].note.starts_with("Last opened over a year ago"));
         assert!(!items[1].safe && items[1].command.is_empty());
+        assert!(
+            items[1].removal.starts_with("osascript"),
+            "a decided person can still copy it"
+        );
     }
 }
