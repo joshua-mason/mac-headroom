@@ -207,7 +207,7 @@ pub fn builtins() -> Vec<Cleaner> {
         )
         .with_plain(
             "Chrome's web cache",
-            "Images and files Chrome saved to load websites faster. Your bookmarks, passwords, history and logins are not touched.",
+            "Images and files Chrome saved so websites load faster. Your history, bookmarks, passwords and logins stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
         ),
         paths(
             "terraform-plugins",
