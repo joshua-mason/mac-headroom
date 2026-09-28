@@ -183,6 +183,31 @@ pub fn builtins() -> Vec<Cleaner> {
             "Downloaded programming packages",
             "Packages kept by tools such as Python's pip and Swift. They download again if a project needs them.",
         ),
+        Cleaner {
+            older_than_days: Some(1),
+            ..paths(
+                "gradle-caches",
+                "Gradle's dependency and build caches, and downloaded Gradle distributions",
+                "Downloaded libraries, compiled-task outputs and the Gradle versions that gradlew fetched. Gradle downloads and rebuilds whatever the next build needs; its own docs say the caches folder can be deleted. A build in flight would fail, and a daemon is a plain java process that cannot be told from any other, so anything modified in the last day is left alone: a daemon stops after three idle hours, and a day-old cache has no build running against it.",
+                None,
+                &["~/.gradle/caches/*", "~/.gradle/wrapper/dists/*"],
+            )
+        }
+        .with_plain(
+            "Gradle's downloads",
+            "Libraries and copies of Gradle itself that Android and Java projects downloaded. Gradle downloads them again when a project builds. Anything used in the last day is kept.",
+        ),
+        paths(
+            "cargo-registry",
+            "Cargo's downloaded crates (registry cache and unpacked sources)",
+            "Only ~/.cargo/registry/cache and ~/.cargo/registry/src: the .crate downloads and the copies unpacked from them. The registry index beside them, which is what makes a fresh cargo update quick, is untouched, and so are installed binaries and any git dependencies. Cargo downloads a crate again the next time a build needs it. Skipped while cargo is running, since a build reads the unpacked sources as it goes.",
+            Some("cargo"),
+            &["~/.cargo/registry/cache/*", "~/.cargo/registry/src/*"],
+        )
+        .with_plain(
+            "Downloaded Rust packages",
+            "Copies of libraries that Rust projects downloaded. Cargo downloads them again when a project needs them. Skipped while a Rust build is running.",
+        ),
         paths(
             "spotify-cache",
             "Spotify streaming cache",
