@@ -252,13 +252,12 @@ pub fn builtins() -> Vec<Cleaner> {
         ),
         paths(
             "arc-cache",
-            "Arc HTTP, code and GPU caches (profile data untouched)",
-            "Arc keeps its Chromium cache beside its profile, under Application Support rather than Caches, so the three cache folders there are matched by name and nothing else in the profile is: cookies, history, logins and Arc's own spaces and sidebar sit in other folders of the same directory and are never touched. Skipped while Arc is open.",
+            "Arc HTTP and code caches (profile data untouched)",
+            "Only ~/Library/Caches/Arc: the Cache and Code Cache folders of each profile, checked on a real install. Arc's GPU cache sits inside the profile under Application Support, beside cookies, history, logins and Arc's own spaces and sidebar, so that whole directory is left alone. Skipped while Arc is open.",
             Some("Arc"),
             &[
-                "~/Library/Application Support/Arc/User Data/*/Cache",
-                "~/Library/Application Support/Arc/User Data/*/Code Cache",
-                "~/Library/Application Support/Arc/User Data/*/GPUCache",
+                "~/Library/Caches/Arc/User Data/*/Cache",
+                "~/Library/Caches/Arc/User Data/*/Code Cache",
             ],
         )
         .with_plain(
