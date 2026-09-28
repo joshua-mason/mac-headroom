@@ -169,25 +169,19 @@ pub fn builtins() -> Vec<Cleaner> {
         ),
         paths(
             "language-caches",
-            "pip, SwiftPM, node-gyp, TypeScript, Yarn, Bun, Dart and Composer download caches",
-            "Pure download caches. The next install fetches what it needs again. Dart's is only the hosted packages under .pub-cache: the bin and global_packages folders beside them hold tools the person installed and are not touched.",
+            "pip, SwiftPM, node-gyp and TypeScript download caches",
+            "Pure download caches. The next install fetches what it needs again.",
             None,
             &[
                 "~/Library/Caches/pip/*",
                 "~/Library/Caches/org.swift.swiftpm/*",
                 "~/Library/Caches/node-gyp/*",
                 "~/Library/Caches/typescript/*",
-                "~/Library/Caches/Yarn/*",
-                "~/.yarn/berry/cache/*",
-                "~/.bun/install/cache/*",
-                "~/.pub-cache/hosted/*",
-                "~/Library/Caches/composer/*",
-                "~/.composer/cache/*",
             ],
         )
         .with_plain(
             "Downloaded programming packages",
-            "Packages kept by tools such as Python's pip, Swift, Yarn and Bun. They download again if a project needs them.",
+            "Packages kept by tools such as Python's pip and Swift. They download again if a project needs them.",
         ),
         Cleaner {
             older_than_days: Some(1),
@@ -213,17 +207,6 @@ pub fn builtins() -> Vec<Cleaner> {
         .with_plain(
             "Downloaded Rust packages",
             "Copies of libraries that Rust projects downloaded. Cargo downloads them again when a project needs them. Skipped while a Rust build is running.",
-        ),
-        paths(
-            "cocoapods-cache",
-            "CocoaPods download cache",
-            "Only ~/Library/Caches/CocoaPods, the pods CocoaPods downloaded before copying them into projects. Each project's own Pods folder is untouched. A pod install fetches what it needs again.",
-            None,
-            &["~/Library/Caches/CocoaPods/*"],
-        )
-        .with_plain(
-            "Downloaded CocoaPods libraries",
-            "Copies of libraries that iOS and Mac projects downloaded through CocoaPods. They download again when a project needs them.",
         ),
         paths(
             "spotify-cache",
