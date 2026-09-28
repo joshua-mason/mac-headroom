@@ -12,6 +12,8 @@
 //! the modification times of the app's own preferences, Application Support,
 //! caches and saved state are read too. An app with none of these is reported
 //! as unknown, never as unused: no record is not the same as no use.
+//! An app with anything of its own running, a VPN's daemon say, is in use and
+//! is not listed at all.
 
 use crate::findings::Item;
 use crate::util::{disk_usage, home, now};
@@ -26,6 +28,11 @@ pub const UNUSED_AFTER: u64 = 180 * 86_400;
 /// Apps smaller than this are not worth someone's attention one by one.
 const MIN_APP: u64 = 50_000_000;
 
+/// An app with no record of a launch is a weaker case, so it is listed only
+/// when it is large enough that a wrong guess costs real space. Under this,
+/// a row saying "nothing records when it was last opened" was noise.
+const MIN_UNKNOWN_APP: u64 = 500_000_000;
+
 /// What can be said about an app that has not been opened lately.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Verdict {
@@ -33,9 +40,6 @@ pub enum Verdict {
     Unused { last_used: u64 },
     /// Nothing on the Mac records a launch. The tool does not guess.
     Unknown,
-    /// Something inside the bundle is running now, named here. Old by every
-    /// other signal, but not something to move while it runs.
-    Running(String),
 }
 
 /// An app worth listing: where it is, how big, and the verdict.
@@ -170,11 +174,11 @@ pub fn app_name(app: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// The running processes whose executable is inside `apps`, by app. One
-/// `ps` for every app rather than a `pgrep` each: a helper or a daemon that
-/// an app installed counts as the app running, since moving the bundle from
-/// under it is what this exists to avoid.
-fn running_inside(apps: &[&Path]) -> Vec<Option<String>> {
+/// Whether anything inside each bundle is running, by app. One `ps` for
+/// every app rather than a `pgrep` each. A helper or a daemon that an app
+/// installed counts as the app in use: a VPN whose daemon runs is doing its
+/// job whether or not its window was ever opened, so it is not listed.
+fn running_inside(apps: &[&Path]) -> Vec<bool> {
     let listing = Command::new("ps")
         .args(["-axo", "comm="])
         .output()
@@ -186,9 +190,7 @@ fn running_inside(apps: &[&Path]) -> Vec<Option<String>> {
             listing
                 .lines()
                 .map(str::trim)
-                .find(|line| line.starts_with(&prefix))
-                .and_then(|line| line.rsplit('/').next())
-                .map(str::to_string)
+                .any(|line| line.starts_with(&prefix))
         })
         .collect()
 }
@@ -211,15 +213,19 @@ pub fn find() -> Vec<UnusedApp> {
     let mut out: Vec<UnusedApp> = stale
         .iter()
         .zip(running)
-        .filter_map(|((path, used), running)| {
+        .filter(|(_, running)| !running)
+        .filter_map(|((path, used), _)| {
             let bytes = disk_usage(path);
-            if bytes < MIN_APP {
-                return None;
-            }
-            Some(UnusedApp {
+            let verdict = match used {
+                Some(last_used) => Verdict::Unused {
+                    last_used: *last_used,
+                },
+                None => Verdict::Unknown,
+            };
+            worth_listing(&verdict, bytes).then(|| UnusedApp {
                 path: path.clone(),
                 bytes,
-                verdict: verdict(*used, running),
+                verdict,
             })
         })
         .collect();
@@ -227,11 +233,11 @@ pub fn find() -> Vec<UnusedApp> {
     out
 }
 
-fn verdict(last_used: Option<u64>, running: Option<String>) -> Verdict {
-    match (running, last_used) {
-        (Some(process), _) => Verdict::Running(process),
-        (None, Some(last_used)) => Verdict::Unused { last_used },
-        (None, None) => Verdict::Unknown,
+/// A known case from 50 MB; an unknown one only from 500 MB.
+fn worth_listing(verdict: &Verdict, bytes: u64) -> bool {
+    match verdict {
+        Verdict::Unused { .. } => bytes >= MIN_APP,
+        Verdict::Unknown => bytes >= MIN_UNKNOWN_APP,
     }
 }
 
@@ -277,10 +283,6 @@ pub fn items(apps: &[UnusedApp], now: u64) -> Vec<Item> {
                     false,
                     "Nothing on this Mac records when it was last opened, so decide for yourself before removing it."
                         .to_string(),
-                ),
-                Verdict::Running(process) => (
-                    false,
-                    format!("Part of it is running right now ({process}). Quit it first."),
                 ),
             };
             Item {
@@ -348,13 +350,15 @@ mod tests {
     }
 
     #[test]
-    fn running_beats_stale_and_no_record_is_not_unused() {
-        assert_eq!(
-            verdict(Some(5), Some("expressvpn-daemon".into())),
-            Verdict::Running("expressvpn-daemon".into())
+    fn an_app_with_no_record_needs_to_be_large_to_be_worth_a_row() {
+        let unused = Verdict::Unused { last_used: 5 };
+        assert!(worth_listing(&unused, 60_000_000));
+        assert!(!worth_listing(&unused, 40_000_000));
+        assert!(
+            !worth_listing(&Verdict::Unknown, 240_000_000),
+            "a 240 MB mystery is noise"
         );
-        assert_eq!(verdict(Some(5), None), Verdict::Unused { last_used: 5 });
-        assert_eq!(verdict(None, None), Verdict::Unknown);
+        assert!(worth_listing(&Verdict::Unknown, 600_000_000));
     }
 
     #[test]
