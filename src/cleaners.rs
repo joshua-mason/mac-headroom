@@ -251,20 +251,6 @@ pub fn builtins() -> Vec<Cleaner> {
             "Images and files Microsoft Edge saved so websites load faster. Your history, bookmarks, passwords and logins stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
         ),
         paths(
-            "arc-cache",
-            "Arc HTTP and code caches (profile data untouched)",
-            "Only ~/Library/Caches/Arc: the Cache and Code Cache folders of each profile, checked on a real install. Arc's GPU cache sits inside the profile under Application Support, beside cookies, history, logins and Arc's own spaces and sidebar, so that whole directory is left alone. Skipped while Arc is open.",
-            Some("Arc"),
-            &[
-                "~/Library/Caches/Arc/User Data/*/Cache",
-                "~/Library/Caches/Arc/User Data/*/Code Cache",
-            ],
-        )
-        .with_plain(
-            "Arc's web cache",
-            "Images and files Arc saved so websites load faster. Your history, bookmarks, passwords, logins, spaces and sidebar stay, and links you have visited still show as visited. Sites take a moment longer the first time you open them again.",
-        ),
-        paths(
             "terraform-plugins",
             "Terraform's shared provider plugin cache",
             "A download cache kept so repeated `terraform init` runs are fast. A project that used it may hold links into it, so the next init in that project downloads again. Nothing is lost but the download.",
