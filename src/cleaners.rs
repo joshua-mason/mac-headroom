@@ -682,6 +682,12 @@ pub struct Estimate {
     pub name: String,
     pub title: String,
     pub plain: String,
+    /// The cleaner's own account of why deleting this loses nothing, as
+    /// written for someone who will check it. `plain` is the same thing for
+    /// someone who will not. Carried so a caller can hand the reasoning on,
+    /// to a person or an assistant, instead of only the verdict.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why_safe: String,
     /// None when it cannot be measured, for instance a tool that is not installed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
@@ -711,6 +717,7 @@ pub fn estimate(c: &Cleaner) -> Estimate {
         } else {
             c.plain.clone()
         },
+        why_safe: c.why_safe.clone(),
         bytes: None,
         upper_bound: false,
         blocked_by: c.skip_if_running.clone().filter(|p| is_running(p)),
@@ -1024,6 +1031,17 @@ pub fn print_text(c: &Cleaner, o: &Outcome) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_estimate_carries_the_cleaners_reasoning() {
+        let c = super::builtins()
+            .into_iter()
+            .find(|c| c.name == "npm-cache")
+            .unwrap();
+        let e = super::estimate(&c);
+        assert_eq!(e.why_safe, c.why_safe);
+        assert!(!e.why_safe.is_empty());
+    }
+
     use super::*;
 
     fn user(name: &str, paths: &[&str]) -> Cleaner {
