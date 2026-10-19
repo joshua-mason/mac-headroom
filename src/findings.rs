@@ -852,6 +852,63 @@ fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: 
     });
 }
 
+/// What web apps keep for themselves inside a Chromium browser's profile:
+/// Service Worker storage, where Gmail, Slack, Figma and their like hold
+/// what they need to open fast and work offline. It is separate from the
+/// HTTP cache the browser cleaners clear, and it sits under Application
+/// Support with history and logins, which the tool has promised to leave
+/// alone. So this is a row that measures it and says where the browser's
+/// own controls are, never a cleaner. 5 GB on the author's Mac.
+fn web_app_storage(out: &mut Vec<Detection>, h: &Path) {
+    let browsers = [
+        ("Chrome", "Library/Application Support/Google/Chrome"),
+        (
+            "Brave",
+            "Library/Application Support/BraveSoftware/Brave-Browser",
+        ),
+        ("Edge", "Library/Application Support/Microsoft Edge"),
+    ];
+    let mut largest: Vec<(String, u64)> = Vec::new();
+    for (name, dir) in browsers {
+        let Ok(profiles) = fs::read_dir(h.join(dir)) else {
+            continue;
+        };
+        for profile in profiles.filter_map(Result::ok).map(|e| e.path()) {
+            let store = profile.join("Service Worker");
+            if store.is_dir() {
+                let bytes = disk_usage(&store);
+                if bytes > 0 {
+                    let profile_name = profile
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    largest.push((
+                        format!("{name}, {profile_name}: {}", store.display()),
+                        bytes,
+                    ));
+                }
+            }
+        }
+    }
+    let bytes: u64 = largest.iter().map(|(_, b)| b).sum();
+    if bytes < WORTH_A_LOOK {
+        return;
+    }
+    largest.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    largest.truncate(5);
+    out.push(Detection {
+        id: "web-app-storage".into(),
+        title: "Web apps' offline storage in Chrome".into(),
+        bytes,
+        what: "What web apps such as Gmail, Slack and Figma keep inside the browser so they open fast and work offline. It is separate from the browser cache the app clears, and it sits with your history and logins, so the app leaves it alone.".into(),
+        how: "In Chrome, open chrome://settings/content/all to see each site's storage and delete a site's. A site builds it again the next time you open it; one you relied on offline needs an online visit first. Brave and Edge have the same page under their settings.".into(),
+        path: None,
+        largest,
+        actions: vec![],
+        items: vec![],
+    });
+}
+
 pub fn detections() -> Vec<Detection> {
     let h = home();
     let mut out = Vec::new();
@@ -932,6 +989,8 @@ pub fn detections() -> Vec<Detection> {
             items: vec![],
         });
     }
+    web_app_storage(&mut out, &h);
+
     fixed(&mut out, h.join("Library/Application Support/MobileSync/Backup"), "iphone-backups", "iPhone and iPad backups",
         "Full backups of devices made on this Mac. They can be very large, and old ones are easy to forget.",
         "In Finder, select your device in the sidebar and choose Manage Backups to delete old ones.");
