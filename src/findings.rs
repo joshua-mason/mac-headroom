@@ -1055,6 +1055,7 @@ mod tests {
                     name: cleaner.into(),
                     title: String::new(),
                     plain: String::new(),
+                    why_safe: String::new(),
                     bytes: Some(1_000_000_000),
                     upper_bound: false,
                     blocked_by: None,
