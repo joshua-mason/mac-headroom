@@ -909,6 +909,79 @@ fn web_app_storage(out: &mut Vec<Detection>, h: &Path) {
     });
 }
 
+/// The folder name Claude Code gives a project's transcripts, such as
+/// `-Users-jo-git-shop`, back to a path: `~/git/shop`. Every `/` became a
+/// `-`, and so did the dashes already in folder names, so the name is
+/// ambiguous; the folders that exist decide. At each step the longest run
+/// of pieces that names a real folder is taken. A name no walk can place
+/// is shown as it is.
+fn claude_project_path(name: &str, home: &Path) -> String {
+    let pieces: Vec<&str> = name.trim_start_matches('-').split('-').collect();
+    let mut at = PathBuf::from("/");
+    let mut i = 0;
+    while i < pieces.len() {
+        let mut taken = 0;
+        for k in (1..=pieces.len() - i).rev() {
+            let candidate = at.join(pieces[i..i + k].join("-"));
+            if candidate.is_dir() {
+                at = candidate;
+                taken = k;
+                break;
+            }
+        }
+        if taken == 0 {
+            return name.to_string();
+        }
+        i += taken;
+    }
+    let shown = at.display().to_string();
+    match shown.strip_prefix(&home.display().to_string()) {
+        Some(rest) => format!("~{rest}"),
+        None => shown,
+    }
+}
+
+/// Claude Code's session transcripts, per project. `claude --resume` reads
+/// them, and there is no telling which a person will want back, so this is
+/// a row and not a cleaner: it says how much there is, which projects, and
+/// that Claude Code will prune them itself if told how long to keep.
+fn claude_code_sessions(out: &mut Vec<Detection>, h: &Path) {
+    let dir = h.join(".claude/projects");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let mut largest: Vec<(String, u64)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .map(|p| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (claude_project_path(&name, h), disk_usage(&p))
+        })
+        .collect();
+    let bytes: u64 = largest.iter().map(|(_, b)| b).sum();
+    if bytes < WORTH_A_LOOK {
+        return;
+    }
+    largest.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+    let count = largest.len();
+    largest.truncate(5);
+    out.push(Detection {
+        id: "claude-code-sessions".into(),
+        title: format!("Claude Code's session history ({count} projects)"),
+        bytes,
+        what: "A transcript of every Claude Code session, kept per project under ~/.claude/projects so a session can be resumed. They are never cleared on their own.".into(),
+        how: "Claude Code prunes them itself if you tell it how long to keep: add \"cleanupPeriodDays\": 30 to ~/.claude/settings.json. Or delete the folder of a project you have finished with; its sessions can then not be resumed.".into(),
+        path: Some(dir.display().to_string()),
+        largest,
+        actions: vec![],
+        items: vec![],
+    });
+}
+
 pub fn detections() -> Vec<Detection> {
     let h = home();
     let mut out = Vec::new();
@@ -990,6 +1063,7 @@ pub fn detections() -> Vec<Detection> {
         });
     }
     web_app_storage(&mut out, &h);
+    claude_code_sessions(&mut out, &h);
 
     fixed(&mut out, h.join("Library/Application Support/MobileSync/Backup"), "iphone-backups", "iPhone and iPad backups",
         "Full backups of devices made on this Mac. They can be very large, and old ones are easy to forget.",
@@ -1099,6 +1173,30 @@ mod tests {
 {"Active":"2","Reclaimable":"1.2GB","Size":"9.8GB","TotalCount":"34","Type":"Local Volumes"}
 {"Active":"0","Reclaimable":"512.5MB","Size":"512.5MB","TotalCount":"40","Type":"Build Cache"}
 "#;
+
+    #[test]
+    fn a_claude_project_folder_name_is_placed_by_the_folders_that_exist() {
+        let root = scratch("claude-names");
+        let home = root.join("Users/jo");
+        fs::create_dir_all(home.join("git/my-shop/www")).unwrap();
+        fs::create_dir_all(home.join("git/my")).unwrap();
+        let name = |p: &Path| p.display().to_string().replace('/', "-");
+        assert_eq!(
+            claude_project_path(&name(&home.join("git/my-shop/www")), &home),
+            "~/git/my-shop/www",
+            "my-shop beats my, since the longest run that exists wins"
+        );
+        assert_eq!(
+            claude_project_path(&name(&home.join("git/my")), &home),
+            "~/git/my"
+        );
+        assert_eq!(
+            claude_project_path("-nowhere-at-all", &home),
+            "-nowhere-at-all",
+            "a name that cannot be placed is shown as it is"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn docker_sizes_are_decimal_and_carry_their_unit() {

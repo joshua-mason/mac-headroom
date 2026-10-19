@@ -357,6 +357,23 @@ pub fn builtins() -> Vec<Cleaner> {
             "Compiled pieces Go keeps so builds are quicker. Go rebuilds them when it needs them.",
         ),
         Cleaner {
+            older_than_days: Some(1),
+            ..paths(
+                "claude-code-logs",
+                "Claude Code's debug logs and MCP server logs",
+                "Logs Claude Code writes about its own runs, under ~/.claude/debug and ~/Library/Caches/claude-cli-nodejs, one file per session and per MCP server. Nothing reads them back except someone diagnosing Claude Code itself, and they grow without limit: users have reported tens of gigabytes. Anything written in the last day is left alone, since a running session appends to its own file, and the `latest` link Claude Code keeps in debug is not matched.",
+                None,
+                &[
+                    "~/.claude/debug/*.*",
+                    "~/Library/Caches/claude-cli-nodejs/*/mcp-logs-*/*",
+                ],
+            )
+        }
+        .with_plain(
+            "Claude Code's logs",
+            "Logs Claude Code keeps about its own runs. Nothing you wrote is in them, and nothing reads them. Today's are kept.",
+        ),
+        Cleaner {
             keep_newest: Some(2),
             skip_if_open: true,
             ..paths(
