@@ -465,10 +465,53 @@ type Sized = Vec<(PathBuf, u64)>;
 /// The manifests that make a folder beside them build output.
 const BUILD_MANIFESTS: [&str; 2] = ["Cargo.toml", "Package.swift"];
 
+/// Xcode's derived data, when a project keeps it inside itself
+/// (`xcodebuild -derivedDataPath build`, which scripts and agents do so a
+/// build is reproducible). Recognised by what Xcode always writes there,
+/// never by the folder's name: `Build` and `Index.noindex` together, with
+/// Xcode's own `info.plist` beside them. ~/Library/Developer/Xcode's copy
+/// is the xcode-derived-data cleaner's business, not this.
+fn is_xcode_derived_data(dir: &Path) -> bool {
+    dir.join("Build").is_dir()
+        && dir.join("Index.noindex").is_dir()
+        && dir.join("info.plist").is_file()
+}
+
+/// Whether an Xcode project sits beside a folder, or one level down, as
+/// when a repository keeps its project under `app/` and its derived data
+/// at the top. Only then is a derived data folder known to be rebuildable.
+fn has_xcode_project(project: &Path) -> bool {
+    let is_project = |p: &Path| {
+        p.extension()
+            .is_some_and(|e| e == "xcodeproj" || e == "xcworkspace")
+    };
+    let Ok(entries) = fs::read_dir(project) else {
+        return false;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if is_project(&path) || path.file_name().is_some_and(|n| n == "project.yml") {
+            return true;
+        }
+        if path.is_dir() && !path.file_name().is_some_and(|n| n == "build") {
+            if let Ok(children) = fs::read_dir(&path) {
+                if children
+                    .filter_map(Result::ok)
+                    .any(|c| is_project(&c.path()))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Whether a directory is a build tool's output folder, going by more than
 /// its name. `target` is a common word; Cargo's has a Cargo.toml beside it
 /// and either its cache tag or a profile folder inside. SwiftPM's `.build`
-/// has a Package.swift beside it.
+/// has a Package.swift beside it. Xcode's derived data is known by its
+/// contents, whatever it is called.
 fn is_build_output(dir: &Path) -> bool {
     let (Some(name), Some(project)) = (dir.file_name().and_then(|n| n.to_str()), dir.parent())
     else {
@@ -482,7 +525,7 @@ fn is_build_output(dir: &Path) -> bool {
                     || dir.join("release").is_dir())
         }
         ".build" => project.join("Package.swift").is_file(),
-        _ => false,
+        _ => is_xcode_derived_data(dir),
     }
 }
 
@@ -537,6 +580,27 @@ fn rebuild_verdict(folder: &Path, kind: Rebuilt) -> (bool, String) {
     // beside it and from nothing else, so a build makes it again. What it
     // costs is time, and the note says so.
     if let Rebuilt::BuildOutput = kind {
+        if is_xcode_derived_data(folder) {
+            return if !has_xcode_project(project) {
+                (
+                    false,
+                    "Xcode's build output with no project beside it, so nothing says what made it"
+                        .to_string(),
+                )
+            } else if is_running("Xcode") {
+                (
+                    false,
+                    "Xcode's build output, made again by the next build; Xcode is open now, so quit it first"
+                        .to_string(),
+                )
+            } else {
+                (
+                    true,
+                    "Xcode's build output, made again by the next build, slowly the first time"
+                        .to_string(),
+                )
+            };
+        }
         return if BUILD_MANIFESTS.iter().any(|m| project.join(m).is_file()) {
             (
                 true,
@@ -876,7 +940,7 @@ pub fn detections() -> Vec<Detection> {
     let trees_found: Vec<PathBuf> = trees.iter().map(|(p, _)| p.clone()).collect();
     let (node_found, venv_found, built_found) = (node.clone(), venv.clone(), built.clone());
     grouped(&mut out, built, "build-folders", "Project build folders",
-        "Compiled output that Rust and Swift keep beside a project's source. It grows with every build and is never cleared on its own.",
+        "Compiled output that Rust, Swift and Xcode keep beside a project's source. It grows with every build and is never cleared on its own.",
         "Delete the build folder of projects you are not working on. The next build makes it again from the source, from scratch, so expect that one build to be slow.");
     grouped(&mut out, node, "node-modules", "JavaScript project dependencies",
         "Each JavaScript project keeps a node_modules folder of the libraries it uses. They add up quickly across many projects.",
@@ -1270,9 +1334,38 @@ mod tests {
         fs::create_dir_all(&empty).unwrap();
         fs::write(root.join("odd/Cargo.toml"), "").unwrap();
 
+        // Xcode's derived data inside a project, whatever the folder is
+        // called, with the project beside it or one level down.
+        let derived = root.join("ios/build");
+        for d in ["Build/Products", "Index.noindex"] {
+            fs::create_dir_all(derived.join(d)).unwrap();
+        }
+        fs::write(derived.join("info.plist"), "").unwrap();
+        fs::create_dir_all(root.join("ios/app/Thing.xcodeproj")).unwrap();
+        // A folder called build with none of Xcode's marks in it.
+        let plain = root.join("web/build");
+        fs::create_dir_all(plain.join("static")).unwrap();
+        fs::create_dir_all(root.join("web/Site.xcodeproj")).unwrap();
+        // Derived data with no project anywhere near it.
+        let orphan = root.join("loose/DerivedData");
+        for d in ["Build", "Index.noindex"] {
+            fs::create_dir_all(orphan.join(d)).unwrap();
+        }
+        fs::write(orphan.join("info.plist"), "").unwrap();
+
         assert!(is_build_output(&cargo));
         assert!(is_build_output(&swift));
         assert!(!is_build_output(&archery));
+        assert!(is_build_output(&derived));
+        assert!(!is_build_output(&plain));
+        assert!(
+            is_build_output(&orphan),
+            "it is build output; whether it is safe is the next question"
+        );
+        assert!(has_xcode_project(&root.join("ios")));
+        assert!(!has_xcode_project(&root.join("loose")));
+        let (safe, why) = rebuild_verdict(&orphan, Rebuilt::BuildOutput);
+        assert!(!safe && why.contains("no project beside it"), "{why}");
         assert!(!is_build_output(&empty));
 
         let items = rebuildable_items(
