@@ -20,6 +20,31 @@ pub struct Disk {
     /// volume can use them. The report shows the difference rather than
     /// leaving someone to wonder where it went.
     pub media: Option<u64>,
+    /// What the swap files hold on disk. See `swap_bytes`.
+    pub swap: Option<u64>,
+}
+
+/// Where macOS keeps swap: its own volume, sharing free space with the rest.
+const SWAP_DIR: &str = "/System/Volumes/VM";
+
+/// The space the swap files take on disk right now, in physical blocks.
+///
+/// Swap is memory that open apps spilled onto the disk. macOS adds a file at a
+/// time as memory runs short and only hands them all back at a restart, so on
+/// a Mac that has been busy for days this is tens of gigabytes that no file
+/// scan can see. The sleep image lives beside them and is not counted: a
+/// restart does not give that back. None when the folder cannot be listed.
+pub fn swap_bytes() -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let entries = fs::read_dir(SWAP_DIR).ok()?;
+    Some(
+        entries
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("swapfile"))
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.blocks() * 512)
+            .sum(),
+    )
 }
 
 fn bytes_field(diskutil_out: &str, label: &str) -> Option<u64> {
@@ -65,6 +90,7 @@ pub fn disk() -> Option<Disk> {
         // A drive smaller than the container it holds means the parse is
         // wrong, and a wrong number explained confidently is worse than none.
         media: media_bytes(&info).filter(|m| *m >= total),
+        swap: swap_bytes(),
     })
 }
 
@@ -108,6 +134,10 @@ pub struct Reading {
     pub at: u64,
     pub used: u64,
     pub free: u64,
+    /// Swap on disk at the time. Absent in rows written before it was
+    /// recorded, which is every row older than version 0.9.0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap: Option<u64>,
 }
 
 /// How old a reading has to be before it is worth comparing against.
@@ -134,9 +164,50 @@ fn parse_history(text: &str) -> Vec<Reading> {
                 at: f.next()?.parse().ok()?,
                 used: f.next()?.parse().ok()?,
                 free: f.next()?.parse().ok()?,
+                // A fourth column that does not parse costs the row its swap
+                // figure, not the row.
+                swap: f.next().and_then(|v| v.parse().ok()),
             })
         })
         .collect()
+}
+
+/// When this Mac last started, from `sysctl -n kern.boottime`, which prints
+/// `{ sec = 1794924701, usec = 481048 } Tue Nov 17 14:11:41 2026`.
+fn parse_boot_time(sysctl_out: &str) -> Option<u64> {
+    let rest = sysctl_out.split_once("sec = ")?.1;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+pub fn boot_time() -> Option<u64> {
+    parse_boot_time(&stdout_of("sysctl", &["-n", "kern.boottime"]))
+}
+
+/// What the last restart did to free space: the reading before it beside the
+/// first one after. Two measurements and the time between them, nothing
+/// inferred, so whoever shows it can say "33 GB free, up from 3 GB" and name
+/// how much of the gap was swap.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Restart {
+    /// When the Mac started.
+    pub at: u64,
+    pub before: Reading,
+    pub after: Reading,
+}
+
+/// A first reading later than this after the restart has had time to move for
+/// other reasons, and would credit the restart with them.
+const RESTART_AFTER_WINDOW_SECS: u64 = 2 * 3600;
+
+pub fn last_restart(rows: &[Reading], boot_at: u64) -> Option<Restart> {
+    let before = rows.iter().rev().find(|r| r.at < boot_at).copied()?;
+    let after = rows.iter().find(|r| r.at >= boot_at).copied()?;
+    (after.at - boot_at <= RESTART_AFTER_WINDOW_SECS).then_some(Restart {
+        at: boot_at,
+        before,
+        after,
+    })
 }
 
 /// The reading to compare the present against: the newest one at least a day
@@ -231,7 +302,10 @@ fn append_reading(d: &Disk, at: u64) {
         .append(true)
         .open(history_path())
     {
-        let _ = writeln!(f, "{}\t{}\t{}", at, d.used, d.free);
+        let _ = match d.swap {
+            Some(swap) => writeln!(f, "{}\t{}\t{}\t{}", at, d.used, d.free, swap),
+            None => writeln!(f, "{}\t{}\t{}", at, d.used, d.free),
+        };
     }
 }
 
@@ -387,6 +461,7 @@ mod tests {
             at,
             used: at,
             free: at,
+            swap: None,
         }
     }
 
@@ -430,6 +505,7 @@ mod tests {
             at,
             used: 500 * 1_000_000_000 - free,
             free,
+            swap: None,
         }
     }
 
@@ -490,5 +566,49 @@ mod tests {
     fn history_skips_lines_that_do_not_parse() {
         let rows = parse_history("1\t2\t3\n\nnot a row\n4\t5\n7\t8\t9\n");
         assert_eq!(rows.iter().map(|r| r.at).collect::<Vec<_>>(), vec![1, 7]);
+    }
+
+    #[test]
+    fn history_reads_swap_where_a_row_has_it() {
+        let rows = parse_history("1\t2\t3\n4\t5\t6\t7\n8\t9\t10\tnope\n");
+        assert_eq!(
+            rows.iter().map(|r| r.swap).collect::<Vec<_>>(),
+            vec![None, Some(7), None],
+            "an old row and a damaged column both keep their row"
+        );
+    }
+
+    #[test]
+    fn boot_time_is_the_seconds_field() {
+        assert_eq!(
+            parse_boot_time("{ sec = 1794924701, usec = 481048 } Tue Nov 17 14:11:41 2026\n"),
+            Some(1_794_924_701)
+        );
+        assert_eq!(parse_boot_time(""), None);
+    }
+
+    #[test]
+    fn a_restart_is_the_readings_either_side_of_it() {
+        let boot = 100_000;
+        let rows = [
+            at(boot - 7200),
+            at(boot - 600),
+            at(boot + 120),
+            at(boot + 3720),
+        ];
+        assert_eq!(
+            last_restart(&rows, boot),
+            Some(Restart {
+                at: boot,
+                before: at(boot - 600),
+                after: at(boot + 120),
+            })
+        );
+        // Nothing recorded since the restart, or nothing before it.
+        assert_eq!(last_restart(&rows[..2], boot), None);
+        assert_eq!(last_restart(&rows[2..], boot), None);
+        // A first reading hours later has had time to move on its own.
+        let late = [at(boot - 600), at(boot + RESTART_AFTER_WINDOW_SECS + 1)];
+        assert_eq!(last_restart(&late, boot), None);
     }
 }
