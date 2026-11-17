@@ -430,6 +430,10 @@ struct Overview {
     /// A staged macOS update's snapshot is on the disk. It holds space until
     /// the update is installed, and no file scan will find it.
     update_snapshot_pinned: bool,
+    /// The readings either side of the last restart, when both exist. A
+    /// restart empties swap, which is often the largest thing it gives back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_restart: Option<diag::Restart>,
 }
 
 #[derive(Serialize)]
@@ -437,7 +441,13 @@ struct DiskNow {
     used: u64,
     free: u64,
     total: u64,
+    /// Swap on disk now: what a restart would hand back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    swap: Option<u64>,
 }
+
+/// Below this, swap is the ordinary cost of a running Mac and not worth a line.
+const SWAP_WORTH_SAYING: u64 = 2_000_000_000;
 
 fn count_lines(p: &std::path::Path) -> usize {
     std::fs::read_to_string(p)
@@ -465,10 +475,12 @@ fn overview() -> Overview {
         .map(|rd| rd.flatten().count())
         .unwrap_or(0);
     let disk = diag::disk();
+    let history = diag::history();
     let trend = disk
         .as_ref()
-        .map(|d| diag::trend(&diag::history(), util::now(), d.free));
+        .map(|d| diag::trend(&history, util::now(), d.free));
     Overview {
+        last_restart: diag::boot_time().and_then(|at| diag::last_restart(&history, at)),
         findings: findings::load_current(),
         full_disk_access: util::full_disk_access(),
         trend,
@@ -479,6 +491,7 @@ fn overview() -> Overview {
             used: d.used,
             free: d.free,
             total: d.total,
+            swap: d.swap,
         }),
         config: cfg,
         cleaners_enabled,
@@ -504,6 +517,25 @@ fn print_overview(o: &Overview) {
     }
     if let Some(t) = &o.trend {
         println!("Trend   {}", diag::trend_sentence(t));
+    }
+    if let Some(swap) = o
+        .disk
+        .as_ref()
+        .and_then(|d| d.swap)
+        .filter(|s| *s >= SWAP_WORTH_SAYING)
+    {
+        println!(
+            "Swap    {} of memory spilled onto the disk; a restart gives it back",
+            human(swap)
+        );
+    }
+    if let Some(r) = &o.last_restart {
+        println!(
+            "Restart {}: {} free before, {} after",
+            util::ago(r.at),
+            human(r.before.free),
+            human(r.after.free)
+        );
     }
     if o.update_snapshot_pinned {
         println!("        macOS is holding space for a staged update; install it and restart to get it back");

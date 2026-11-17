@@ -15,7 +15,9 @@ when it last ran, and how much history exists. Its `trend` is the last week of
 readings with `free_change` (free now less free a week ago, once the record spans
 a day) and `full_in_days` (at that rate, only when free space is falling), and
 `update_snapshot_pinned` says a staged macOS update is holding space that no file
-scan will find. Start here when the user asks "what
+scan will find. `disk.swap` is memory spilled onto the disk, which only a restart
+gives back, and `last_restart` holds the readings either side of the last one, so
+you can say what it freed. Start here when the user asks "what
 is set up?" or "what does this do on my machine?".
 
 When the user wants to *see* the picture rather than read it, `mac-headroom report`
