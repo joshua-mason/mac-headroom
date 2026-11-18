@@ -357,6 +357,20 @@ pub fn builtins() -> Vec<Cleaner> {
             "Compiled pieces Go keeps so builds are quicker. Go rebuilds them when it needs them.",
         ),
         Cleaner {
+            skip_if_running: Some("go".into()),
+            ..cmd(
+                "go-mod-cache",
+                "Go module cache (downloaded modules and their unpacked sources)",
+                "Go's own clean, `go clean -modcache`, which empties the folder `go env GOMODCACHE` names: the module downloads and the copies unpacked from them. Go marks those copies read-only, which is why this runs Go's command and does not delete the folder itself. Nothing a project owns is in there: go.mod and go.sum stay with each project, and installed binaries live in GOBIN, outside it. The next build downloads the modules it needs again and checks them against go.sum, so that one build needs a network connection. Skipped while go is running, since a build reads the unpacked sources as it goes.",
+                &["go", "clean", "-modcache"],
+                &["go", "env", "GOMODCACHE"],
+            )
+        }
+        .with_plain(
+            "Downloaded Go packages",
+            "Copies of libraries that Go projects downloaded. Go downloads them again when a project needs them. Skipped while a Go build is running.",
+        ),
+        Cleaner {
             older_than_days: Some(1),
             ..paths(
                 "claude-code-logs",
