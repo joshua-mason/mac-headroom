@@ -101,14 +101,42 @@ pub struct Detection {
     /// The individual things found, where each can be judged separately.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<Item>,
+    /// How much dealing with this would give back, where that differs from
+    /// `bytes` and cannot be measured ahead of time. A range with both ends
+    /// worked out from figures, in place of saying it is not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frees: Option<Span>,
+}
+
+/// A figure that could not be pinned to one number: no less than `low`, no
+/// more than `high`. The two are equal when the sums happen to agree.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Span {
+    pub low: u64,
+    pub high: u64,
+}
+
+impl Span {
+    /// "10 to 13 GB", or "about 10 GB" when both ends print the same.
+    pub fn words(&self) -> String {
+        let (low, high) = (human(self.low), human(self.high));
+        if low == high {
+            return format!("about {high}");
+        }
+        match (low.split_once(' '), high.split_once(' ')) {
+            (Some((n, unit)), Some((_, same))) if unit == same => format!("{n} to {high}"),
+            _ => format!("{low} to {high}"),
+        }
+    }
 }
 
 /// Detections something can be done about, and the cleaner that does it.
 /// Deliberately short. A detection earns an action only when the work is
 /// rebuildable or re-downloadable, needs no sudo, and frees a figure the tool
 /// can stand behind afterwards. Docker is the instructive exclusion: pruning
-/// its build cache frees space inside a disk image that does not shrink, so a
-/// button would report a number the disk would not agree with.
+/// frees space inside a disk image that shrinks later and by its own sum, so
+/// a button would report a number the disk would not agree with. It gets a
+/// range in `frees` and its commands in words.
 const ACTIONS: [(&str, &str, &str); 3] = [
     ("claude-vm", "claude-vm-bundles", "Delete the sandbox image"),
     (
@@ -304,6 +332,7 @@ pub fn load_current() -> Option<Findings> {
 struct DockerUsage {
     kind: String,
     count: u64,
+    size: u64,
     reclaimable: u64,
 }
 
@@ -333,16 +362,44 @@ fn parse_docker_df(text: &str) -> Vec<DockerUsage> {
             Some(DockerUsage {
                 kind: v.get("Type")?.as_str()?.to_string(),
                 count: v.get("TotalCount")?.as_str()?.parse().ok()?,
+                size: parse_docker_size(v.get("Size")?.as_str()?)?,
                 reclaimable: parse_docker_size(reclaimable.split(' ').next()?)?,
             })
         })
         .collect()
 }
 
-/// What to say about Docker's disk once Docker has been asked. The figures
-/// are Docker's own and are given as such. Volumes are counted out: they are
-/// where databases live, and nothing here should nudge anyone to prune them.
-fn docker_advice(rows: &[DockerUsage]) -> Option<String> {
+/// How much of Docker's disk file pruning would give back, as a range. Docker
+/// counts what is unused in its own way, and the file hands back what it
+/// trims, which is not the same sum: a prune here was promised 10 GB by
+/// Docker, reported 3 GB when it ran, and returned 13 GB to the disk. So one
+/// end is Docker's count of what is unused, and the other is what the file
+/// holds beyond everything Docker says is still in use, volumes included.
+/// Whichever is smaller is the low end, and neither can exceed the file.
+fn docker_span(rows: &[DockerUsage], unused: u64, file_bytes: u64) -> Span {
+    let prunable = |r: &&DockerUsage| r.kind != "Local Volumes";
+    let kept: u64 = rows
+        .iter()
+        .map(|r| {
+            if prunable(&r) {
+                r.size.saturating_sub(r.reclaimable)
+            } else {
+                r.size
+            }
+        })
+        .sum();
+    let beyond = file_bytes.saturating_sub(kept);
+    let counted = unused.min(file_bytes);
+    Span {
+        low: counted.min(beyond),
+        high: counted.max(beyond),
+    }
+}
+
+/// What to say about Docker's disk once Docker has been asked, and how much
+/// pruning would give back. Volumes are counted out: they are where databases
+/// live, and nothing here should nudge anyone to prune them.
+fn docker_advice(rows: &[DockerUsage], file_bytes: u64) -> Option<(String, Option<Span>)> {
     let of = |kind: &str| rows.iter().find(|r| r.kind == kind);
     let images = of("Images").map_or(0, |r| r.reclaimable);
     let cache = of("Build Cache").map_or(0, |r| r.reclaimable);
@@ -360,8 +417,11 @@ fn docker_advice(rows: &[DockerUsage]) -> Option<String> {
     };
     let total = images + cache + containers;
     if total < 100_000_000 {
-        return Some(format!(
-            "Docker reports almost nothing inside it as unused, so pruning would free little.{volumes}"
+        return Some((
+            format!(
+                "Docker reports almost nothing inside it as unused, so pruning would free little.{volumes}"
+            ),
+            None,
         ));
     }
     let mut parts = Vec::new();
@@ -383,10 +443,15 @@ fn docker_advice(rows: &[DockerUsage]) -> Option<String> {
             human(containers)
         ));
     }
-    Some(format!(
-        "Docker reports {} inside it as unused: {}. That is Docker's figure, not a measurement of this disk, and how much of it the file hands back is up to Docker Desktop.{volumes}",
-        human(total),
-        parts.join(", ")
+    let span = docker_span(rows, total, file_bytes);
+    Some((
+        format!(
+            "Pruning should give back {}. Docker counts {} inside it as unused: {}. The other end of that range is what the file holds beyond everything Docker says is in use. Docker Desktop shrinks the file a few minutes after a prune, and the \"Total reclaimed space\" Docker prints can read lower than both, so go by the free space on the disk.{volumes}",
+            span.words(),
+            human(total),
+            parts.join(", ")
+        ),
+        Some(span),
     ))
 }
 
@@ -399,8 +464,11 @@ fn explain_docker(out: &mut [Detection]) {
     };
     let asked =
         crate::util::stdout_within("docker", &["system", "df", "--format", "{{json .}}"], 10);
-    match asked.and_then(|text| docker_advice(&parse_docker_df(&text))) {
-        Some(advice) => d.how = advice,
+    match asked.and_then(|text| docker_advice(&parse_docker_df(&text), d.bytes)) {
+        Some((advice, frees)) => {
+            d.how = advice;
+            d.frees = frees;
+        }
         None => d.how.push_str(
             " Docker is not running, so it could not be asked how much of this is unused. Start Docker Desktop and scan again to see.",
         ),
@@ -415,6 +483,7 @@ fn fixed(out: &mut Vec<Detection>, path: PathBuf, id: &str, title: &str, what: &
     if bytes >= WORTH_A_LOOK {
         out.push(Detection {
             id: id.into(),
+            frees: None,
             title: title.into(),
             bytes,
             what: what.into(),
@@ -837,6 +906,7 @@ fn grouped(out: &mut Vec<Detection>, items: Sized, id: &str, title: &str, what: 
     items.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
     out.push(Detection {
         id: id.into(),
+        frees: None,
         title: format!("{title} ({} folders)", items.len()),
         bytes,
         what: what.into(),
@@ -898,6 +968,7 @@ fn web_app_storage(out: &mut Vec<Detection>, h: &Path) {
     largest.truncate(5);
     out.push(Detection {
         id: "web-app-storage".into(),
+        frees: None,
         title: "Web apps' offline storage in Chrome".into(),
         bytes,
         what: "What web apps such as Gmail, Slack and Figma keep inside the browser so they open fast and work offline. It is separate from the browser cache the app clears, and it sits with your history and logins, so the app leaves it alone.".into(),
@@ -971,6 +1042,7 @@ fn claude_code_sessions(out: &mut Vec<Detection>, h: &Path) {
     largest.truncate(5);
     out.push(Detection {
         id: "claude-code-sessions".into(),
+        frees: None,
         title: format!("Claude Code's session history ({count} projects)"),
         bytes,
         what: "A transcript of every Claude Code session, kept per project under ~/.claude/projects so a session can be resumed. They are never cleared on their own.".into(),
@@ -1052,6 +1124,7 @@ pub fn detections() -> Vec<Detection> {
     if music >= WORTH_A_LOOK {
         out.push(Detection {
             id: "music-creation".into(),
+            frees: None,
             title: "GarageBand's sound library".into(),
             bytes: music,
             what: "Instruments and loops GarageBand downloaded, shared with Logic. They stay even if you only opened GarageBand once.".into(),
@@ -1109,6 +1182,7 @@ pub fn detections() -> Vec<Detection> {
         let at = now();
         out.push(Detection {
             id: "unused-apps".into(),
+            frees: None,
             title: format!("Apps not opened in six months ({} apps)", apps.len()),
             bytes: app_bytes,
             what: "Apps in your Applications folder that nothing shows you opening for six months or more. An editor tried once or a tool from an old course can be a gigabyte or two, and nothing on the Mac ever points it out.".into(),
@@ -1130,6 +1204,7 @@ pub fn detections() -> Vec<Detection> {
             if bytes >= WORTH_A_LOOK {
                 out.push(Detection {
                     id: "whatsapp-orphans".into(),
+                    frees: None,
                     title: format!("WhatsApp files it has forgotten ({} files)", orphans.len()),
                     bytes,
                     what: "Photos and videos WhatsApp downloaded and then lost track of, usually after you logged in again. WhatsApp's own storage settings cannot see or remove them.".into(),
@@ -1212,12 +1287,25 @@ mod tests {
         let rows = parse_docker_df(DOCKER_DF);
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].reclaimable, 3_650_000_000);
-        let advice = docker_advice(&rows).unwrap();
+        assert_eq!(rows[0].size, 4_102_000_000);
+        // A 16 GB file. Docker counts 4.2 GB unused, and says 0.45 GB of
+        // images and 9.8 GB of volumes are in use, which leaves 5.7 GB of the
+        // file unaccounted for: the range runs from one to the other.
+        let (advice, frees) = docker_advice(&rows, 16_000_000_000).unwrap();
         // Images and build cache, and not the 1.2 GB Docker calls reclaimable
         // in volumes: those are someone's databases.
         assert!(
-            advice.starts_with("Docker reports 4.2 GB inside it as unused"),
+            advice.starts_with(
+                "Pruning should give back 4.2 to 5.7 GB. Docker counts 4.2 GB inside it as unused"
+            ),
             "{advice}"
+        );
+        assert_eq!(
+            frees,
+            Some(Span {
+                low: 4_162_500_000,
+                high: 5_747_987_700
+            })
         );
         assert!(
             advice.contains("docker image prune -a") && advice.contains("docker builder prune")
@@ -1232,7 +1320,8 @@ mod tests {
         let empty = parse_docker_df(
             r#"{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Images"}"#,
         );
-        let advice = docker_advice(&empty).unwrap();
+        let (advice, frees) = docker_advice(&empty, 16_000_000_000).unwrap();
+        assert_eq!(frees, None, "nothing to prune is not a range of nothing");
         assert!(
             advice.starts_with("Docker reports almost nothing"),
             "{advice}"
@@ -1240,9 +1329,61 @@ mod tests {
         assert!(!advice.contains("volume"));
         // Docker did not answer at all: nothing to say, keep the general advice.
         assert_eq!(
-            docker_advice(&parse_docker_df("Cannot connect to the Docker daemon")),
+            docker_advice(
+                &parse_docker_df("Cannot connect to the Docker daemon"),
+                16_000_000_000
+            ),
             None
         );
+    }
+
+    /// The prune this was written after: Docker counted 10 GB unused in a
+    /// 13.56 GB file with 155 MB of volumes, and the disk got 13.2 GB back.
+    #[test]
+    fn docker_range_holds_what_a_real_prune_gave_back() {
+        let rows = parse_docker_df(
+            r#"{"Active":"0","Reclaimable":"10.02GB (100%)","Size":"10.02GB","TotalCount":"16","Type":"Images"}
+{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Containers"}
+{"Active":"0","Reclaimable":"154.9MB (100%)","Size":"154.9MB","TotalCount":"4","Type":"Local Volumes"}
+{"Active":"0","Reclaimable":"0B","Size":"0B","TotalCount":"0","Type":"Build Cache"}"#,
+        );
+        let (advice, frees) = docker_advice(&rows, 13_562_535_936).unwrap();
+        let frees = frees.unwrap();
+        let gave_back = 13_562_535_936 - 388_000_000;
+        assert!(frees.low <= gave_back && gave_back <= frees.high);
+        assert!(
+            advice.starts_with("Pruning should give back 10 to 13 GB."),
+            "{advice}"
+        );
+    }
+
+    /// Docker's sizes count a layer once per image that shares it, so they
+    /// can add up to more than the file holds. The file is then the low end,
+    /// and no end is ever more than the file.
+    #[test]
+    fn docker_range_never_promises_more_than_the_file_holds() {
+        let rows = parse_docker_df(
+            r#"{"Active":"2","Reclaimable":"9GB (60%)","Size":"15GB","TotalCount":"9","Type":"Images"}"#,
+        );
+        let span = docker_span(&rows, 9_000_000_000, 8_000_000_000);
+        assert_eq!(
+            span,
+            Span {
+                low: 2_000_000_000,
+                high: 8_000_000_000
+            }
+        );
+        assert_eq!(span.words(), "2.0 to 8.0 GB");
+        let agree = Span {
+            low: 4_960_000_000,
+            high: 5_040_000_000,
+        };
+        assert_eq!(agree.words(), "about 5.0 GB");
+        let mixed = Span {
+            low: 800_000_000,
+            high: 2_000_000_000,
+        };
+        assert_eq!(mixed.words(), "800 MB to 2.0 GB");
     }
 
     /// A typo in ACTIONS would not fail to compile: it would silently leave a
@@ -1264,6 +1405,7 @@ mod tests {
     fn detection(id: &str, path: &Path, cleaner: &str) -> Detection {
         Detection {
             id: id.into(),
+            frees: None,
             title: id.into(),
             bytes: 1_000_000_000,
             what: String::new(),
