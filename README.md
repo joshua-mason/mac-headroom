@@ -40,6 +40,11 @@ mac-headroom record            # add a reading to the timeline and nothing else
 - Sizes are written in decimal units, the way Finder writes them: a GB is a
   billion bytes, not 1,073,741,824. Counting in units of 1024 makes the same
   disk read about 7% smaller, which looks like space that has gone missing.
+- A figure that cannot be measured ahead of time is given as a range with
+  both ends worked out, never as "not known". Docker's disk file is the case
+  that set this: what a prune gives back is neither Docker's count nor the
+  line it prints afterwards, so the scan says "10 to 13 GB" and where each
+  end comes from. The JSON carries it as `frees: {low, high}`.
 - Chrome's profile data (Application Support) is never touched. Only its cache is.
 - Every real deletion, and only a real deletion, is appended to
   `~/.local/state/mac-headroom/audit.log`. A target a filter kept is not
